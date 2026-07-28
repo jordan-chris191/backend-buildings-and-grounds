@@ -1,0 +1,320 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// =========================================================
+// AUTH
+// =========================================================
+
+model Role {
+  id          String  @id @default(uuid())
+  name        String  @unique   // "Admin", "BG Office Staff", "Custodian", "Faculty", "Staff"
+  description String?
+  users       User[]
+}
+
+model User {
+  id           String  @id @default(uuid())
+  email        String  @unique
+  passwordHash String
+  firstName    String
+  lastName     String
+  isActive     Boolean @default(true)
+
+  // Security
+  lastLoginAt         DateTime?
+  failedLoginAttempts Int       @default(0)
+  lockedUntil         DateTime?
+
+  // Audit
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  roleId String
+  role   Role   @relation(fields: [roleId], references: [id], onDelete: Restrict)
+
+  refreshTokens       RefreshToken[]
+  passwordResetTokens PasswordResetToken[]
+  notifications       Notification[]
+
+  requestedWorkRequests  WorkRequest[]            @relation("RequestedWorkRequests")
+  assignedWorkRequests   WorkRequest[]            @relation("AssignedWorkRequests")
+  workRequestAssignments WorkRequestAssignment[]
+  accomplishments        WorkRequestAccomplishment[]
+
+  issuancesAsCustodian   ItemIssuance[]        @relation("IssuanceCustodian")
+  withdrawalsAsCustodian WarehouseWithdrawal[] @relation("WithdrawalCustodian")
+
+  @@index([roleId])
+}
+
+model RefreshToken {
+  id        String    @id @default(uuid())
+  tokenHash String    @unique
+  expiresAt DateTime
+  revokedAt DateTime?
+  createdAt DateTime  @default(now())
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model PasswordResetToken {
+  id        String    @id @default(uuid())
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+// =========================================================
+// NOTIFICATIONS
+// =========================================================
+
+model Notification {
+  id        String   @id @default(uuid())
+  title     String
+  message   String
+  isRead    Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  workRequestId String?
+  workRequest   WorkRequest? @relation(fields: [workRequestId], references: [id])
+
+  @@index([userId])
+  @@index([isRead])
+}
+
+// =========================================================
+// INVENTORY
+// =========================================================
+
+enum ItemType {
+  CONSUMABLE
+  ASSET
+  TOOL
+}
+
+model Project {
+  id          String        @id @default(uuid())
+  name        String
+  description String?
+  startDate   DateTime?
+  endDate     DateTime?
+  status      ProjectStatus @default(ONGOING)
+  createdAt   DateTime      @default(now())
+
+  items InventoryItem[]
+}
+
+enum ProjectStatus {
+  ONGOING
+  COMPLETED
+  ON_HOLD
+  CANCELLED
+}
+
+model InventoryItem {
+  id             String   @id @default(uuid())
+  name           String
+  type           ItemType
+  description    String?
+  quantity       Int      @default(1)
+  location       String?
+
+  propertyNumber String?  @unique
+  serialNumber   String?  @unique
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // null = common/general stock, set = belongs to a specific project
+  projectId String?
+  project   Project? @relation(fields: [projectId], references: [id])
+
+  workRequests WorkRequest[]
+  issuances    ItemIssuance[]
+  withdrawals  WarehouseWithdrawal[]
+
+  @@index([projectId])
+  @@index([type])
+}
+
+// =========================================================
+// WORK REQUESTS (a.k.a. Job Orders — same record, richer over time)
+// =========================================================
+
+enum RequestType {
+  REGULAR_MAINTENANCE
+  REPAIR
+  FABRICATION
+  INSTALLATION
+  REPLACEMENT
+  PLAN_DESIGN
+  BAYANIHAN
+  OTHERS
+}
+
+enum RequestStatus {
+  PENDING
+  ASSIGNED
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+model WorkRequest {
+  id               String        @id @default(uuid())
+  referenceNo      String        @unique // Control Number / Work Number — e.g. "WR-2026-0001"
+  requestType      RequestType
+  requestingOffice String
+  particulars      String?
+
+  // type-specific fields, shape depends on requestType
+  details Json?
+
+  status          RequestStatus @default(PENDING)
+  deadline        DateTime?
+  progressPercent Int           @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  requestedById String
+  requestedBy   User   @relation("RequestedWorkRequests", fields: [requestedById], references: [id])
+
+  // Primary/lead assignee (quick reference)
+  assignedToId String?
+  assignedTo   User?   @relation("AssignedWorkRequests", fields: [assignedToId], references: [id])
+
+  // Full crew with individual roles (Technician, Plumber, Electrician, etc.)
+  assignments WorkRequestAssignment[]
+
+  inventoryItemId String?
+  inventoryItem   InventoryItem? @relation(fields: [inventoryItemId], references: [id])
+
+  accomplishment WorkRequestAccomplishment?
+  notifications  Notification[]
+
+  @@index([requestedById])
+  @@index([assignedToId])
+  @@index([status])
+  @@index([inventoryItemId])
+}
+
+model WorkRequestAssignment {
+  id         String   @id @default(uuid())
+  role       String   // "Technician", "Plumber", "Electrician", "Lead", etc.
+  assignedAt DateTime @default(now())
+
+  workRequestId String
+  workRequest   WorkRequest @relation(fields: [workRequestId], references: [id])
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id])
+
+  @@unique([workRequestId, userId, role])
+  @@index([workRequestId])
+  @@index([userId])
+}
+
+model WorkRequestAccomplishment {
+  id                String    @id @default(uuid())
+  dateTimeStarted   DateTime?
+  dateTimeCompleted DateTime?
+
+  // type-specific completion details as JSON
+  completionDetails Json?
+
+  serviceRating     Int?    // 1-5
+  expectationRating Int?    // 1-5
+  comments          String?
+
+  workRequestId String      @unique
+  workRequest   WorkRequest @relation(fields: [workRequestId], references: [id])
+
+  bgPersonnelId String
+  bgPersonnel   User   @relation(fields: [bgPersonnelId], references: [id])
+
+  createdAt DateTime @default(now())
+}
+
+// =========================================================
+// ITEM ISSUANCE / RETURN TRACKING
+// =========================================================
+
+model ItemIssuance {
+  id            String @id @default(uuid())
+  controlNumber String @unique
+
+  inventoryItemId String
+  inventoryItem   InventoryItem @relation(fields: [inventoryItemId], references: [id])
+  quantity        Int           @default(1)
+
+  borrowerName  String
+  studentId     String? // if borrower is a student
+  contactNumber String? // if borrower is external/staff without a student ID
+
+  custodianId String
+  custodian   User   @relation("IssuanceCustodian", fields: [custodianId], references: [id])
+
+  issuedAt   DateTime  @default(now())
+  dueBackAt  DateTime?
+  returnedAt DateTime?
+
+  @@index([inventoryItemId])
+  @@index([custodianId])
+}
+
+// =========================================================
+// WAREHOUSE (BODEGA) WITHDRAWALS
+// =========================================================
+
+model WarehouseWithdrawal {
+  id             String @id @default(uuid())
+  issuanceSlipNo String @unique
+
+  inventoryItemId String
+  inventoryItem   InventoryItem @relation(fields: [inventoryItemId], references: [id])
+  quantity        Int
+
+  withdrawnByName String // person/office who took the consumables
+
+  custodianId String
+  custodian   User   @relation("WithdrawalCustodian", fields: [custodianId], references: [id])
+
+  withdrawnAt DateTime @default(now())
+
+  @@index([inventoryItemId])
+  @@index([custodianId])
+}
+
+// =========================================================
+// SHARED SEQUENTIAL NUMBER GENERATOR
+// (Work Requests, Issuances, Withdrawals all use this)
+// =========================================================
+
+model SequenceCounter {
+  type  String // "WR", "ISS", "WH"
+  year  Int
+  count Int    @default(0)
+
+  @@id([type, year])
+}

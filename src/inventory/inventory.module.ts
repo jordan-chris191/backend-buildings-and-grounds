@@ -1,0 +1,13 @@
+// src/inventory/inventory.module.ts
+import { Module } from '@nestjs/common';
+import { InventoryController } from './dto/inventory.controller';
+import { InventoryService } from './inventory.service';
+import { PrismaModule } from '../prisma/prisma.module';
+import { AuthModule } from '../auth/auth.module';
+
+@Module({
+  imports: [PrismaModule, AuthModule],
+  controllers: [InventoryController],
+  providers: [InventoryService],
+})
+export class InventoryModule {}
