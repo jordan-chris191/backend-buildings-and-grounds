@@ -1,5 +1,15 @@
 // src/auth/auth.controller.ts
-import { Body, Controller, Post, UseGuards, Req } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Post,
+  Get,
+  Patch,
+  Param,
+  Query,
+  UseGuards,
+  Req,
+} from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import { AuthService } from './auth.service';
 import { LoginDto } from './dto/login.dto';
@@ -10,6 +20,7 @@ import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { Roles } from './decorators/roles.decorator';
 import { RolesGuard } from './guards/roles.guard';
 import { CreateUserDto } from './dto/create-user.dto';
+import { ChangeRoleDto } from './dto/change-role.dto';
 
 @Controller('auth')
 export class AuthController {
@@ -32,7 +43,7 @@ export class AuthController {
     return this.authService.logout(dto.refreshToken);
   }
 
-  @Throttle({ default: { limit: 3, ttl: 3600000 } }) // 3 requests per hour
+  @Throttle({ default: { limit: 3, ttl: 3600000 } })
   @Post('request-password-reset')
   requestPasswordReset(@Body() dto: RequestPasswordResetDto) {
     return this.authService.requestPasswordReset(dto.email);
@@ -50,10 +61,31 @@ export class AuthController {
     return req.user;
   }
 
-    @UseGuards(JwtAuthGuard, RolesGuard)
-    @Roles('Administrator')
-    @Post('users')
-    createUser(@Body() dto: CreateUserDto) {
-    return this.authService.createUser(dto);
-    }
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('Administrator')
+  @Post('users')
+  createUser(@Body() dto: CreateUserDto, @Req() req) {
+    return this.authService.createUser(dto, req.user.userId);
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('Administrator', 'Building & Grounds Officer')
+  @Get('users')
+  findUsers(@Query('positionId') positionId?: string, @Query('roleId') roleId?: string) {
+    return this.authService.findUsers(positionId, roleId);
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('Administrator')
+  @Patch('users/:id/role')
+  changeRole(@Param('id') id: string, @Body() dto: ChangeRoleDto, @Req() req) {
+    return this.authService.changeRole(id, dto.roleId, req.user.userId);
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('Administrator')
+  @Patch('users/:id/deactivate')
+  deactivateUser(@Param('id') id: string, @Req() req) {
+    return this.authService.deactivateUser(id, req.user.userId);
+  }
 }

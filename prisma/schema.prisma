@@ -13,7 +13,7 @@ datasource db {
 
 model Role {
   id          String  @id @default(uuid())
-  name        String  @unique   // "Admin", "BG Office Staff", "Custodian", "Faculty", "Staff"
+  name        String  @unique   // "Administrator", "Building & Grounds Officer", "Property Custodian", "Faculty", "Campus Staff"
   description String?
   users       User[]
 }
@@ -42,15 +42,29 @@ model User {
   passwordResetTokens PasswordResetToken[]
   notifications       Notification[]
 
-  requestedWorkRequests  WorkRequest[]            @relation("RequestedWorkRequests")
-  assignedWorkRequests   WorkRequest[]            @relation("AssignedWorkRequests")
+  requestedWorkRequests  WorkRequest[]               @relation("RequestedWorkRequests")
+  assignedWorkRequests   WorkRequest[]               @relation("AssignedWorkRequests")
   workRequestAssignments WorkRequestAssignment[]
   accomplishments        WorkRequestAccomplishment[]
 
   issuancesAsCustodian   ItemIssuance[]        @relation("IssuanceCustodian")
   withdrawalsAsCustodian WarehouseWithdrawal[] @relation("WithdrawalCustodian")
 
+  requestedPurchaseRequests PurchaseRequest[] @relation("RequestedPurchaseRequests")
+  approvedPurchaseRequests  PurchaseRequest[] @relation("ApprovedPurchaseRequests")
+
+  createdMaintenanceSchedules MaintenanceSchedule[]
+
+  stockMovementsPerformed StockMovement[]
+
+  auditLogs AuditLog[]
+
   @@index([roleId])
+
+  positionId String?
+  position   Position? @relation(fields: [positionId], references: [id])
+
+  @@index([positionId])
 }
 
 model RefreshToken {
@@ -102,7 +116,7 @@ model Notification {
   @@index([isRead])
 }
 
-// =========================================================
+// =================================1========================
 // INVENTORY
 // =========================================================
 
@@ -113,15 +127,20 @@ enum ItemType {
 }
 
 model Project {
-  id          String        @id @default(uuid())
-  name        String
-  description String?
-  startDate   DateTime?
-  endDate     DateTime?
-  status      ProjectStatus @default(ONGOING)
-  createdAt   DateTime      @default(now())
+  id                String        @id @default(uuid())
+  name              String
+  description       String?
+  startDate         DateTime?
+  endDate           DateTime?
+  status            ProjectStatus @default(ONGOING)
+  createdAt         DateTime      @default(now())
 
-  items InventoryItem[]
+  // Control No. from the Detailed Estimate of Materials document, if imported
+  estimateControlNo String?       @unique
+
+  items             InventoryItem[]
+  materialEstimates MaterialEstimate[]
+  purchaseRequests  PurchaseRequest[]
 }
 
 enum ProjectStatus {
@@ -136,11 +155,16 @@ model InventoryItem {
   name           String
   type           ItemType
   description    String?
-  quantity       Int      @default(1)
+  quantity       Decimal  @default(1)
+  unit           String?  // "PCS", "LENGTH", "KG", "CU. MTR.", etc.
   location       String?
 
   propertyNumber String?  @unique
   serialNumber   String?  @unique
+
+  unitCost        Decimal?
+  totalValue      Decimal?
+  acquisitionDate DateTime?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -149,12 +173,41 @@ model InventoryItem {
   projectId String?
   project   Project? @relation(fields: [projectId], references: [id])
 
-  workRequests WorkRequest[]
-  issuances    ItemIssuance[]
-  withdrawals  WarehouseWithdrawal[]
+  workRequests         WorkRequest[]
+  issuances            ItemIssuance[]
+  withdrawals          WarehouseWithdrawal[]
+  maintenanceSchedules MaintenanceSchedule[]
+  stockMovements       StockMovement[]
 
   @@index([projectId])
   @@index([type])
+}
+
+// =========================================================
+// STOCK MOVEMENT (quantity change ledger / "stock card")
+// =========================================================
+
+model StockMovement {
+  id             String   @id @default(uuid())
+  movementType   String   // "RECEIVED", "WITHDRAWN", "ADJUSTED"
+  quantityChange Decimal  // positive for increases, negative for decreases
+  quantityAfter  Decimal  // snapshot of quantity right after this movement
+  reason         String?
+
+  // Optional traceability back to the record that caused this movement
+  referenceType String?  // "WarehouseWithdrawal", "Manual"
+  referenceId   String?
+
+  inventoryItemId String
+  inventoryItem   InventoryItem @relation(fields: [inventoryItemId], references: [id])
+
+  performedById String
+  performedBy   User   @relation(fields: [performedById], references: [id])
+
+  createdAt DateTime @default(now())
+
+  @@index([inventoryItemId])
+  @@index([createdAt])
 }
 
 // =========================================================
@@ -307,14 +360,144 @@ model WarehouseWithdrawal {
 }
 
 // =========================================================
+// PROCUREMENT: DETAILED ESTIMATES -> PURCHASE REQUESTS
+// =========================================================
+
+model MaterialEstimate {
+  id          String   @id @default(uuid())
+  category    String?  // section header, e.g. "MASONRY WORKS"
+  itemNo      String?  // e.g. "1.1"
+  description String
+  quantity    Decimal
+  unit        String
+  unitCost    Decimal
+  amount      Decimal
+  createdAt   DateTime @default(now())
+
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id])
+
+  purchaseRequestItems PurchaseRequestItem[]
+
+  @@index([projectId])
+}
+
+enum PurchaseRequestStatus {
+  DRAFT
+  PENDING
+  APPROVED
+  REJECTED
+  COMPLETED
+}
+
+model PurchaseRequest {
+  id               String                @id @default(uuid())
+  controlNo        String                @unique // e.g. "PR-2026-0001"
+  requestingOffice String
+  purpose          String?
+  status           PurchaseRequestStatus @default(PENDING)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id])
+
+  requestedById String
+  requestedBy   User   @relation("RequestedPurchaseRequests", fields: [requestedById], references: [id])
+
+  approvedById String?
+  approvedBy   User?     @relation("ApprovedPurchaseRequests", fields: [approvedById], references: [id])
+  approvedAt   DateTime?
+
+  items PurchaseRequestItem[]
+
+  @@index([projectId])
+  @@index([requestedById])
+  @@index([status])
+}
+
+model PurchaseRequestItem {
+  id          String  @id @default(uuid())
+  description String
+  quantity    Decimal
+  unit        String
+  unitCost    Decimal
+  totalCost   Decimal
+
+  purchaseRequestId String
+  purchaseRequest   PurchaseRequest @relation(fields: [purchaseRequestId], references: [id])
+
+  // traceability back to the original estimate line, if converted from one
+  materialEstimateId String?
+  materialEstimate   MaterialEstimate? @relation(fields: [materialEstimateId], references: [id])
+
+  @@index([purchaseRequestId])
+}
+
+// =========================================================
+// PREVENTIVE MAINTENANCE SCHEDULE
+// =========================================================
+
+model MaintenanceSchedule {
+  id              String    @id @default(uuid())
+  title           String    // "Quarterly Aircon Cleaning"
+  frequencyDays   Int       // e.g. 90 for every 3 months
+  lastPerformedAt DateTime?
+  nextDueAt       DateTime
+  isActive        Boolean   @default(true)
+  createdAt       DateTime  @default(now())
+
+  inventoryItemId String
+  inventoryItem   InventoryItem @relation(fields: [inventoryItemId], references: [id])
+
+  createdById String
+  createdBy   User   @relation(fields: [createdById], references: [id])
+
+  @@index([inventoryItemId])
+  @@index([nextDueAt])
+  @@index([isActive])
+}
+
+// =========================================================
+// AUDIT LOG
+// =========================================================
+
+model AuditLog {
+  id         String   @id @default(uuid())
+  action     String   // "CREATE", "UPDATE", "DELETE", "APPROVE", "REJECT", etc.
+  entityType String   // "InventoryItem", "PurchaseRequest", "User", "WorkRequest", etc.
+  entityId   String
+
+  description String?
+  metadata    Json?
+
+  performedById String
+  performedBy   User   @relation(fields: [performedById], references: [id])
+
+  createdAt DateTime @default(now())
+
+  @@index([entityType, entityId])
+  @@index([performedById])
+  @@index([createdAt])
+}
+
+// =========================================================
 // SHARED SEQUENTIAL NUMBER GENERATOR
-// (Work Requests, Issuances, Withdrawals all use this)
+// (Work Requests, Issuances, Withdrawals, Purchase Requests all use this)
 // =========================================================
 
 model SequenceCounter {
-  type  String // "WR", "ISS", "WH"
+  type  String // "WR", "ISS", "WH", "PR"
   year  Int
   count Int    @default(0)
 
   @@id([type, year])
+}
+
+model Position {
+  id          String  @id @default(uuid())
+  name        String  @unique   // "Technician", "Electrician", "Plumber", "Cleaning Utility", etc.
+  description String?
+  users       User[]
 }

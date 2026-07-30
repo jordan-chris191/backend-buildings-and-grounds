@@ -1,13 +1,14 @@
-// src/inventory/inventory.module.ts
+// src/issuances/issuances.module.ts
 import { Module } from '@nestjs/common';
-import { InventoryController } from './inventory.controller';
-import { InventoryService } from './inventory.service';
+import { IssuancesController } from './issuances.controller';
+import { IssuancesService } from './issuances.service';
 import { PrismaModule } from '../prisma/prisma.module';
 import { AuthModule } from '../auth/auth.module';
 import { AuditLogModule } from '../audit-log/audit-log.module';
+
 @Module({
   imports: [PrismaModule, AuthModule, AuditLogModule],
-  controllers: [InventoryController],
-  providers: [InventoryService],
+  controllers: [IssuancesController],
+  providers: [IssuancesService],
 })
-export class InventoryModule {}
+export class IssuancesModule {}

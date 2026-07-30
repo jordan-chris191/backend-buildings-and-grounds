@@ -1,4 +1,4 @@
-import { IsEnum, IsString, IsOptional, IsInt, Min } from 'class-validator';
+import { IsEnum, IsString, IsOptional, IsNumber, IsDateString, Min } from 'class-validator';
 import { ItemType } from '@prisma/client';
 
 export class CreateInventoryItemDto {
@@ -13,9 +13,13 @@ export class CreateInventoryItemDto {
   description?: string;
 
   @IsOptional()
-  @IsInt()
+  @IsNumber()
   @Min(0)
-  quantity?: number;
+  quantity?: number; 
+
+  @IsOptional()
+  @IsString()
+  unit?: string;
 
   @IsOptional()
   @IsString()
@@ -32,4 +36,13 @@ export class CreateInventoryItemDto {
   @IsOptional()
   @IsString()
   projectId?: string;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  unitCost?: number;
+
+  @IsOptional()
+  @IsDateString()
+  acquisitionDate?: string;
 }

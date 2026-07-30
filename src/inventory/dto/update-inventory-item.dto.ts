@@ -1,4 +1,3 @@
-// src/inventory/dto/update-inventory-item.dto.ts
 import { PartialType } from '@nestjs/mapped-types';
 import { CreateInventoryItemDto } from './create-inventory-item.dto';
 

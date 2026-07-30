@@ -1,4 +1,5 @@
-import { IsEmail, IsString, MinLength } from 'class-validator';
+// src/auth/dto/create-user.dto.ts
+import { IsEmail, IsString, IsOptional } from 'class-validator';
 
 export class CreateUserDto {
   @IsEmail()
@@ -12,4 +13,8 @@ export class CreateUserDto {
 
   @IsString()
   roleId: string;
+
+  @IsOptional()
+  @IsString()
+  positionId?: string;
 }

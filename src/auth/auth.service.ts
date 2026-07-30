@@ -1,15 +1,16 @@
-// src/auth/auth.service.ts
-
 import { EmailService } from './email.service';
 import {
   Injectable,
   UnauthorizedException,
   ForbiddenException,
+  NotFoundException
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { PrismaService } from '../prisma/prisma.service';
+import { AuditLogService } from '../audit-log/audit-log.service';
 import * as bcrypt from 'bcrypt';
 import * as crypto from 'crypto';
+
 
 const MAX_FAILED_ATTEMPTS = parseInt(
   process.env.MAX_FAILED_LOGIN_ATTEMPTS ?? '5',
@@ -30,6 +31,7 @@ export class AuthService {
     private prisma: PrismaService,
     private jwtService: JwtService,
     private emailService: EmailService,
+    private auditLogService: AuditLogService,
   ) {}
 
   // ---------------------------------------------------------
@@ -281,36 +283,147 @@ async resetPassword(rawToken: string, newPassword: string) {
     }
 
     //CREATE USER
-    async createUser(dto: { email: string; firstName: string; lastName: string; roleId: string }) {
-      const existing = await this.prisma.user.findUnique({ where: { email: dto.email } });
-      if (existing) {
-        throw new ForbiddenException('A user with this email already exists');
-      }
+async createUser(
+  dto: { email: string; firstName: string; lastName: string; roleId: string; positionId?: string },
+  performedById: string,
+) {
+  const existing = await this.prisma.user.findUnique({ where: { email: dto.email } });
+  if (existing) {
+    throw new ForbiddenException('A user with this email already exists');
+  }
 
-      const defaultPassword = 'staff@123';
-      const passwordHash = await bcrypt.hash(defaultPassword, 10);
+  const defaultPassword = 'staff@123';
+  const passwordHash = await bcrypt.hash(defaultPassword, 10);
 
-      const user = await this.prisma.user.create({
-        data: {
-          email: dto.email,
-          firstName: dto.firstName,
-          lastName: dto.lastName,
-          roleId: dto.roleId,
-          passwordHash,
-        },
-        include: { role: true },
-      });
+  const user = await this.prisma.user.create({
+    data: {
+      email: dto.email,
+      firstName: dto.firstName,
+      lastName: dto.lastName,
+      roleId: dto.roleId,
+      positionId: dto.positionId,
+      passwordHash,
+    },
+    include: { role: true, position: true },
+  });
 
-      return {
-        message: 'User created successfully. Default password: staff@123',
-        user: {
-          id: user.id,
-          email: user.email,
-          firstName: user.firstName,
-          lastName: user.lastName,
-          role: user.role.name,
-        },
-      };
+  await this.auditLogService.log({
+    action: 'CREATE',
+    entityType: 'User',
+    entityId: user.id,
+    description: `Created user ${user.email} with role ${user.role.name}`,
+    performedById,
+  });
+
+  return {
+    message: 'User created successfully. Default password: staff@123',
+    user: {
+      id: user.id,
+      email: user.email,
+      firstName: user.firstName,
+      lastName: user.lastName,
+      role: user.role.name,
+      position: user.position?.name ?? null,
+    },
+  };
+}
+async findUsers(positionId?: string, roleId?: string) {
+  return this.prisma.user.findMany({
+    where: {
+      ...(positionId ? { positionId } : {}),
+      ...(roleId ? { roleId } : {}),
+      isActive: true,
+    },
+    include: { role: true, position: true },
+    orderBy: { firstName: 'asc' },
+  });
+}
+
+// Add these new methods to AuthService
+
+async changeRole(userId: string, newRoleId: string, performedById: string) {
+  const user = await this.prisma.user.findUnique({
+    where: { id: userId },
+    include: { role: true },
+  });
+  if (!user) {
+    throw new NotFoundException('User not found');
+  }
+
+  // Safeguard: prevent removing the last active Administrator
+  if (user.role.name === 'Administrator') {
+    const activeAdminCount = await this.prisma.user.count({
+      where: { isActive: true, role: { name: 'Administrator' } },
+    });
+    if (activeAdminCount <= 1) {
+      throw new ForbiddenException(
+        'Cannot change role of the last active Administrator. Promote another user first.',
+      );
     }
+  }
+
+  const newRole = await this.prisma.role.findUnique({ where: { id: newRoleId } });
+  if (!newRole) {
+    throw new NotFoundException('Role not found');
+  }
+
+  const updated = await this.prisma.user.update({
+    where: { id: userId },
+    data: { roleId: newRoleId },
+    include: { role: true },
+  });
+
+  await this.auditLogService.log({
+    action: 'ROLE_CHANGE',
+    entityType: 'User',
+    entityId: userId,
+    description: `Changed ${user.email}'s role from ${user.role.name} to ${newRole.name}`,
+    performedById,
+  });
+
+  return updated;
+}
+
+async deactivateUser(userId: string, performedById: string) {
+  const user = await this.prisma.user.findUnique({
+    where: { id: userId },
+    include: { role: true },
+  });
+  if (!user) {
+    throw new NotFoundException('User not found');
+  }
+
+  if (user.role.name === 'Administrator') {
+    const activeAdminCount = await this.prisma.user.count({
+      where: { isActive: true, role: { name: 'Administrator' } },
+    });
+    if (activeAdminCount <= 1) {
+      throw new ForbiddenException(
+        'Cannot deactivate the last active Administrator. Promote another user first.',
+      );
+    }
+  }
+
+  const updated = await this.prisma.user.update({
+    where: { id: userId },
+    data: { isActive: false },
+  });
+
+  // Revoke all their active sessions immediately
+  await this.prisma.refreshToken.updateMany({
+    where: { userId, revokedAt: null },
+    data: { revokedAt: new Date() },
+  });
+
+  await this.auditLogService.log({
+    action: 'DEACTIVATE',
+    entityType: 'User',
+    entityId: userId,
+    description: `Deactivated user ${user.email}`,
+    performedById,
+  });
+
+  return updated;
+}
 
 }

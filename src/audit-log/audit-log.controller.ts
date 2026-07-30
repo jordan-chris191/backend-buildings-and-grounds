@@ -1,0 +1,21 @@
+// src/audit-log/audit-log.controller.ts
+import { Controller, Get, Query, UseGuards } from '@nestjs/common';
+import { AuditLogService } from './audit-log.service';
+import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { RolesGuard } from '../auth/guards/roles.guard';
+import { Roles } from '../auth/decorators/roles.decorator';
+
+@UseGuards(JwtAuthGuard, RolesGuard)
+@Roles('Administrator')
+@Controller('audit-log')
+export class AuditLogController {
+  constructor(private auditLogService: AuditLogService) {}
+
+  @Get()
+  findAll(
+    @Query('entityType') entityType?: string,
+    @Query('entityId') entityId?: string,
+  ) {
+    return this.auditLogService.findAll(entityType, entityId);
+  }
+}

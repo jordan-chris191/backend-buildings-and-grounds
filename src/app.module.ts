@@ -8,6 +8,11 @@ import { AuthModule } from './auth/auth.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { InventoryModule } from './inventory/inventory.module';
 import { WorkRequestsModule } from './work-requests/work-requests.module';
+import { IssuancesModule } from './issuances/issuances.module';
+import { WithdrawalsModule } from './withdrawals/withdrawals.module';
+import { NotificationsModule } from './notifications/notifications.module';
+import { ScheduleModule } from '@nestjs/schedule';
+import { MaintenanceSchedulesModule } from './maintenance-schedules/maintenance-schedules.module';
 
 @Module({
   imports: [
@@ -21,7 +26,12 @@ import { WorkRequestsModule } from './work-requests/work-requests.module';
     PrismaModule,
     AuthModule,
     InventoryModule,
-    WorkRequestsModule
+    WorkRequestsModule,
+    IssuancesModule,
+    WithdrawalsModule,
+    NotificationsModule,
+    ScheduleModule.forRoot(),
+    MaintenanceSchedulesModule,
   ],
   controllers: [AppController],
   providers: [
