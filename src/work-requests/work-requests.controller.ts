@@ -22,7 +22,7 @@ export class WorkRequestsController {
   constructor(private workRequestsService: WorkRequestsService) {}
 
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('Faculty', 'Campus Staff')
+  @Roles('Faculty', 'Campus Staff', 'Administrator', 'Building & Grounds Officer')
   @Post()
   create(@Req() req, @Body() dto: CreateWorkRequestDto) {
     return this.workRequestsService.create(req.user.userId, dto);
@@ -41,6 +41,11 @@ export class WorkRequestsController {
     return this.workRequestsService.findMine(req.user.userId);
   }
 
+   @Get("display")
+  findDisplay() {
+    return this.workRequestsService.findDisplay();
+  }
+  
   @UseGuards(JwtAuthGuard)
   @Get(':id')
   findOne(@Param('id') id: string) {
@@ -75,4 +80,6 @@ export class WorkRequestsController {
   ) {
     return this.workRequestsService.updateProgress(id, req.user.userId, progressPercent);
   }
+
+ 
 }

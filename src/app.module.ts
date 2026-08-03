@@ -13,7 +13,8 @@ import { WithdrawalsModule } from './withdrawals/withdrawals.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { ScheduleModule } from '@nestjs/schedule';
 import { MaintenanceSchedulesModule } from './maintenance-schedules/maintenance-schedules.module';
-
+import { PositionsModule } from './positions/positions.module';
+import { ProjectsModule } from './projects/projects.module';
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
@@ -32,6 +33,8 @@ import { MaintenanceSchedulesModule } from './maintenance-schedules/maintenance-
     NotificationsModule,
     ScheduleModule.forRoot(),
     MaintenanceSchedulesModule,
+    PositionsModule,
+    ProjectsModule,
   ],
   controllers: [AppController],
   providers: [

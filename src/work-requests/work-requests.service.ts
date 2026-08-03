@@ -19,21 +19,22 @@ export class WorkRequestsService {
     return `WR-${year}-${counter.count.toString().padStart(4, '0')}`;
   }
 
-  async create(userId: string, dto: CreateWorkRequestDto) {
-    const referenceNo = await this.generateReferenceNo();
+async create(userId: string, dto: CreateWorkRequestDto) {
+  const referenceNo = await this.generateReferenceNo();
 
-    return this.prisma.workRequest.create({
-      data: {
-        referenceNo,
-        requestType: dto.requestType,
-        requestingOffice: dto.requestingOffice,
-        particulars: dto.particulars,
-        details: dto.details,
-        inventoryItemId: dto.inventoryItemId,
-        requestedById: userId,
-      },
-    });
-  }
+  return this.prisma.workRequest.create({
+    data: {
+      referenceNo,
+      requestType: dto.requestType,
+      requestingOffice: dto.requestingOffice,
+      particulars: dto.particulars,
+      details: dto.details,
+      inventoryItemId: dto.inventoryItemId,
+      requestedById: userId,
+      campus: dto.campus,   // ✅ from DTO
+    },
+  });
+}
 
   async findAll() {
     return this.prisma.workRequest.findMany({
@@ -168,4 +169,29 @@ export class WorkRequestsService {
       data: { progressPercent },
     });
   }
+
+  async findDisplay() {
+  return this.prisma.workRequest.findMany({
+    orderBy: {
+      createdAt: 'desc',
+    },
+    select: {
+      id: true,
+      referenceNo: true,
+      requestType: true,
+      requestingOffice: true,
+      particulars: true,
+      status: true,
+      progressPercent: true,
+      createdAt: true,
+
+      assignedTo: {
+        select: {
+          firstName: true,
+          lastName: true,
+        },
+      },
+    },
+  });
+}
 }

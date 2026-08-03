@@ -62,17 +62,17 @@ export class MaintenanceSchedulesService {
       const referenceNo = await this.generateReferenceNo();
 
       const workRequest = await this.prisma.workRequest.create({
-        data: {
-          referenceNo,
-          requestType: 'REGULAR_MAINTENANCE',
-          requestingOffice: 'BG Office (Auto-generated)',
-          particulars: `Scheduled maintenance: ${schedule.title}`,
-          details: { scheduleId: schedule.id, itemName: schedule.inventoryItem.name },
-          inventoryItemId: schedule.inventoryItemId,
-          requestedById: schedule.createdById,
-        },
-      });
-
+      data: {
+        referenceNo,
+        requestType: 'REGULAR_MAINTENANCE',
+        requestingOffice: 'BG Office (Auto-generated)',
+        particulars: `Scheduled maintenance: ${schedule.title}`,
+        details: { scheduleId: schedule.id, itemName: schedule.inventoryItem.name },
+        inventoryItemId: schedule.inventoryItemId,
+        requestedById: schedule.createdById,
+        campus: schedule.inventoryItem.campus,   // ✅ required field, taken from the inventory item
+      },
+    });
       await this.prisma.maintenanceSchedule.update({
         where: { id: schedule.id },
         data: {

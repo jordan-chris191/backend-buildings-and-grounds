@@ -1,10 +1,13 @@
 // src/work-requests/dto/create-work-request.dto.ts
 import { IsEnum, IsString, IsOptional, IsObject } from 'class-validator';
-import { RequestType } from '@prisma/client';
+import { RequestType, Campus } from '@prisma/client';
 
 export class CreateWorkRequestDto {
   @IsEnum(RequestType)
   requestType: RequestType;
+
+  @IsEnum(Campus)
+  campus: Campus;
 
   @IsString()
   requestingOffice: string;

@@ -1,5 +1,6 @@
+// src/inventory/dto/create-inventory-item.dto.ts
 import { IsEnum, IsString, IsOptional, IsNumber, IsDateString, Min } from 'class-validator';
-import { ItemType } from '@prisma/client';
+import { ItemType, Campus } from '@prisma/client';
 
 export class CreateInventoryItemDto {
   @IsString()
@@ -8,6 +9,9 @@ export class CreateInventoryItemDto {
   @IsEnum(ItemType)
   type: ItemType;
 
+  @IsEnum(Campus)
+  campus: Campus;
+
   @IsOptional()
   @IsString()
   description?: string;
@@ -15,7 +19,7 @@ export class CreateInventoryItemDto {
   @IsOptional()
   @IsNumber()
   @Min(0)
-  quantity?: number; 
+  quantity?: number;
 
   @IsOptional()
   @IsString()
@@ -36,6 +40,10 @@ export class CreateInventoryItemDto {
   @IsOptional()
   @IsString()
   projectId?: string;
+
+  @IsOptional()
+  @IsString()
+  categoryId?: string;
 
   @IsOptional()
   @IsNumber()

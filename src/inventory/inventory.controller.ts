@@ -17,9 +17,9 @@ import { UpdateInventoryItemDto } from './dto/update-inventory-item.dto';
 import { JwtAuthGuard } from 'src/auth/guards/jwt-auth.guard';
 import { RolesGuard } from 'src/auth/guards/roles.guard';
 import { Roles } from 'src/auth/decorators/roles.decorator';
-import { ItemType } from '@prisma/client';
+import { ItemType, Campus, ItemStatus } from '@prisma/client';
 import { AdjustQuantityDto } from './dto/adjust-quantity.dto';
-
+import { UpdateStatusDto } from './dto/update-status.dto';
 @Controller('inventory')
 export class InventoryController {
   constructor(private inventoryService: InventoryService) {}
@@ -31,13 +31,22 @@ export class InventoryController {
     return this.inventoryService.create(req.user.userId, dto);
   }
 
+ @UseGuards(JwtAuthGuard)
+@Get()
+findAll(
+  @Query('type') type?: ItemType,
+  @Query('projectId') projectId?: string,
+  @Query('categoryId') categoryId?: string,
+  @Query('campus') campus?: Campus,
+  @Query('status') status?: ItemStatus,
+) {
+  return this.inventoryService.findAll(type, projectId, categoryId, campus, status);
+}
+
   @UseGuards(JwtAuthGuard)
-  @Get()
-  findAll(
-    @Query('type') type?: ItemType,
-    @Query('projectId') projectId?: string,
-  ) {
-    return this.inventoryService.findAll(type, projectId);
+  @Get('categories')
+  findCategories() {
+    return this.inventoryService.findCategories();
   }
 
   @UseGuards(JwtAuthGuard)
@@ -60,6 +69,13 @@ export class InventoryController {
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('Administrator', 'Building & Grounds Officer')
+  @Patch(':id/adjust')
+  adjust(@Param('id') id: string, @Req() req, @Body() dto: AdjustQuantityDto) {
+    return this.inventoryService.adjustQuantity(id, req.user.userId, dto.newQuantity, dto.reason);
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('Administrator')
   @Delete(':id')
   remove(@Param('id') id: string, @Req() req) {
@@ -67,9 +83,9 @@ export class InventoryController {
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('Administrator', 'Building & Grounds Officer')
-  @Patch(':id/adjust')
-  adjust(@Param('id') id: string, @Req() req, @Body() dto: AdjustQuantityDto) {
-    return this.inventoryService.adjustQuantity(id, req.user.userId, dto.newQuantity, dto.reason);
+  @Roles('Administrator', 'Building & Grounds Officer', 'Property Custodian')
+  @Patch(':id/status')
+  updateStatus(@Param('id') id: string, @Req() req, @Body() dto: UpdateStatusDto) {
+    return this.inventoryService.updateStatus(id, dto.status, req.user.userId);
   }
 }

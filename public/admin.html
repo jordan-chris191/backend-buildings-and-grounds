@@ -1,0 +1,892 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>B&G Admin — Full Management Panel</title>
+    <style>
+        :root {
+            --bg: #f0f2f5;
+            --card-bg: #ffffff;
+            --primary: #2563eb;
+            --primary-hover: #1d4ed8;
+            --danger: #dc2626;
+            --danger-hover: #b91c1c;
+            --success: #16a34a;
+            --success-hover: #15803d;
+            --warning: #f59e0b;
+            --text: #1f2937;
+            --text-muted: #6b7280;
+            --border: #e5e7eb;
+            --radius: 8px;
+            --shadow: 0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04);
+            --shadow-md: 0 4px 6px rgba(0,0,0,0.07), 0 2px 4px rgba(0,0,0,0.06);
+            --font: 'Inter', system-ui, -apple-system, sans-serif;
+            --transition: 150ms ease;
+        }
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: var(--font); background: var(--bg); color: var(--text); line-height: 1.5; min-height: 100vh; }
+        .container { max-width: 1440px; margin: 0 auto; padding: 1.25rem; }
+        h1 { font-size: 1.5rem; font-weight: 700; margin-bottom: 0.25rem; color: #111827; }
+        h2 { font-size: 1.15rem; font-weight: 600; margin-bottom: 0.75rem; color: #1f2937; }
+        h3 { font-size: 1rem; font-weight: 600; margin-bottom: 0.5rem; color: #374151; }
+        .top-bar { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.75rem; margin-bottom: 1.25rem; background: var(--card-bg); padding: 0.75rem 1rem; border-radius: var(--radius); box-shadow: var(--shadow); }
+        .top-bar .api-url { display: flex; align-items: center; gap: 0.5rem; font-size: 0.8rem; color: var(--text-muted); }
+        .top-bar .api-url input { width: 240px; padding: 0.4rem 0.55rem; border: 1px solid var(--border); border-radius: 4px; font-size: 0.78rem; font-family: var(--font); }
+        .top-bar .user-info { display: flex; align-items: center; gap: 0.75rem; font-weight: 600; font-size: 0.85rem; }
+        .btn { display: inline-flex; align-items: center; gap: 0.35rem; padding: 0.45rem 0.9rem; border: none; border-radius: 5px; cursor: pointer; font-size: 0.8rem; font-weight: 500; font-family: var(--font); transition: background var(--transition), opacity var(--transition); white-space: nowrap; }
+        .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        .btn-primary { background: var(--primary); color: #fff; }
+        .btn-primary:hover:not(:disabled) { background: var(--primary-hover); }
+        .btn-danger { background: var(--danger); color: #fff; }
+        .btn-danger:hover:not(:disabled) { background: var(--danger-hover); }
+        .btn-success { background: var(--success); color: #fff; }
+        .btn-success:hover:not(:disabled) { background: var(--success-hover); }
+        .btn-outline { background: #fff; color: var(--text); border: 1px solid var(--border); }
+        .btn-outline:hover:not(:disabled) { background: #f9fafb; }
+        .btn-sm { padding: 0.3rem 0.55rem; font-size: 0.7rem; border-radius: 4px; }
+        .btn-xs { padding: 0.2rem 0.4rem; font-size: 0.65rem; border-radius: 3px; }
+        .nav-tabs { display: flex; flex-wrap: wrap; gap: 0.2rem; margin-bottom: 1rem; background: var(--card-bg); padding: 0.4rem; border-radius: var(--radius); box-shadow: var(--shadow); }
+        .nav-tab { padding: 0.5rem 0.85rem; border: none; background: transparent; border-radius: 5px; cursor: pointer; font-size: 0.78rem; font-weight: 500; font-family: var(--font); color: var(--text-muted); transition: all var(--transition); white-space: nowrap; }
+        .nav-tab:hover { background: #f3f4f6; color: var(--text); }
+        .nav-tab.active { background: var(--primary); color: #fff; }
+        .card { background: var(--card-bg); border-radius: var(--radius); padding: 1.25rem; margin-bottom: 1rem; box-shadow: var(--shadow); }
+        .card-header { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 0.75rem; }
+        .form-row { display: flex; flex-wrap: wrap; gap: 0.6rem; margin-bottom: 0.6rem; }
+        .form-group { flex: 1 1 160px; min-width: 130px; }
+        .form-group label { display: block; font-size: 0.72rem; font-weight: 600; margin-bottom: 0.2rem; color: #4b5563; }
+        .form-group input, .form-group select, .form-group textarea { width: 100%; padding: 0.45rem 0.55rem; border: 1px solid var(--border); border-radius: 4px; font-size: 0.78rem; font-family: var(--font); background: #fafbfc; transition: border var(--transition); }
+        .form-group input:focus, .form-group select:focus, .form-group textarea:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 2px rgba(37,99,235,0.1); background: #fff; }
+        .form-group textarea { resize: vertical; min-height: 55px; font-family: 'SF Mono', 'Fira Code', monospace; font-size: 0.72rem; }
+        .alert { padding: 0.4rem 0.7rem; border-radius: 4px; font-size: 0.75rem; margin-top: 0.4rem; }
+        .alert-error { background: #fef2f2; color: var(--danger); border: 1px solid #fecaca; }
+        .alert-success { background: #f0fdf4; color: var(--success); border: 1px solid #bbf7d0; }
+        table { width: 100%; border-collapse: collapse; font-size: 0.75rem; }
+        th, td { text-align: left; padding: 0.5rem 0.6rem; border-bottom: 1px solid var(--border); vertical-align: middle; }
+        th { background: #f9fafb; font-weight: 600; color: #374151; position: sticky; top: 0; z-index: 1; }
+        tr:hover td { background: #fafbfc; }
+        .table-wrap { max-height: 480px; overflow-y: auto; border: 1px solid var(--border); border-radius: var(--radius); }
+        .badge { display: inline-block; padding: 0.15rem 0.45rem; border-radius: 10px; font-size: 0.65rem; font-weight: 600; }
+        .badge-green { background: #d1fae5; color: #065f46; }
+        .badge-yellow { background: #fef3c7; color: #92400e; }
+        .badge-red { background: #fee2e2; color: #991b1b; }
+        .badge-blue { background: #dbeafe; color: #1e40af; }
+        .badge-gray { background: #f3f4f6; color: #4b5563; }
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+        .login-card { max-width: 400px; margin: 5rem auto; padding: 2rem; background: var(--card-bg); border-radius: var(--radius); box-shadow: var(--shadow-md); }
+        .login-card h2 { text-align: center; margin-bottom: 1.25rem; }
+        .empty-state { text-align: center; padding: 2rem; color: var(--text-muted); font-size: 0.85rem; }
+        .hint { font-size: 0.7rem; color: var(--text-muted); margin-bottom: 0.5rem; }
+        @media (max-width: 768px) { .form-group { flex: 1 1 100%; min-width: 100%; } .nav-tab { font-size: 0.7rem; padding: 0.4rem 0.55rem; } table { font-size: 0.7rem; } th, td { padding: 0.35rem 0.4rem; } }
+    </style>
+</head>
+<body>
+<div class="container" id="app-container">
+    <!-- Login Screen -->
+    <div id="login-screen" class="login-card">
+        <h2>🔐 B&G Admin Login</h2>
+        <div class="form-group" style="margin-bottom:0.75rem;">
+            <label>Email</label>
+            <input type="email" id="login-email" placeholder="admin@norsu.edu.ph" value="admin@norsu.edu.ph">
+        </div>
+        <div class="form-group" style="margin-bottom:0.75rem;">
+            <label>Password</label>
+            <input type="password" id="login-password" placeholder="Enter password" value="admin123">
+        </div>
+        <button class="btn btn-primary" onclick="doLogin()" style="width:100%;">Sign In</button>
+        <div id="login-error" class="alert alert-error" style="display:none;margin-top:0.75rem;"></div>
+    </div>
+
+    <!-- Main Dashboard -->
+    <div id="dashboard-screen" style="display:none;">
+        <div class="top-bar">
+            <div class="api-url">
+                <span>🔗 API:</span>
+                <input id="api-base" value="http://localhost:3001" onchange="saveApiBase()">
+            </div>
+            <div class="user-info">
+                <span id="user-display">👤 ...</span>
+                <button class="btn btn-outline btn-sm" onclick="doLogout()">Logout</button>
+            </div>
+        </div>
+        <h1>🏢 Building & Grounds — Admin Panel</h1>
+        <p style="color:var(--text-muted);font-size:0.8rem;margin-bottom:0.75rem;">Full management interface aligned with backend API v1.0</p>
+
+        <div class="nav-tabs" id="nav-tabs">
+            <button class="nav-tab active" data-tab="inventory">📦 Inventory</button>
+            <button class="nav-tab" data-tab="workrequests">🔧 Work Requests</button>
+            <button class="nav-tab" data-tab="issuances">🛠️ Issuances</button>
+            <button class="nav-tab" data-tab="withdrawals">🏬 Withdrawals</button>
+            <button class="nav-tab" data-tab="maintenance">🗓️ Maintenance</button>
+            <button class="nav-tab" data-tab="projects">🏗️ Projects</button>
+            <button class="nav-tab" data-tab="positions">👷 Positions</button>
+            <button class="nav-tab" data-tab="users">👥 Users</button>
+            <button class="nav-tab" data-tab="audit">📜 Audit Log</button>
+            <button class="nav-tab" data-tab="notifications">🔔 Notifications</button>
+        </div>
+
+        <!-- ============ INVENTORY TAB ============ -->
+        <div id="tab-inventory" class="tab-content active">
+            <div class="card">
+                <h3>➕ Create Inventory Item</h3>
+                <div class="form-row">
+                    <div class="form-group"><label>Name *</label><input id="inv-name" placeholder="PVC Pipe 1/2"></div>
+                    <div class="form-group"><label>Type *</label><select id="inv-type"><option value="CONSUMABLE">Consumable</option><option value="ASSET">Asset</option><option value="TOOL">Tool</option></select></div>
+                    <div class="form-group"><label>Campus *</label><select id="inv-campus"><option value="MC1">MC1</option><option value="MC2">MC2</option><option value="PAMPLONA">Pamplona</option></select></div>
+                    <div class="form-group"><label>Category</label><select id="inv-category"><option value="">— none —</option></select></div>
+                    <div class="form-group"><label>Quantity</label><input id="inv-qty" type="number" step="any" value="1"></div>
+                    <div class="form-group"><label>Unit</label><input id="inv-unit" placeholder="PCS"></div>
+                    <div class="form-group"><label>Location</label><input id="inv-location" placeholder="Bodega - Shelf A1"></div>
+                    <div class="form-group"><label>Property No.</label><input id="inv-propnum"></div>
+                    <div class="form-group"><label>Serial No.</label><input id="inv-serial"></div>
+                    <div class="form-group"><label>Unit Cost</label><input id="inv-unitcost" type="number" step="any"></div>
+                    <div class="form-group"><label>Project ID</label><input id="inv-projectid" placeholder="optional"></div>
+                </div>
+                <button class="btn btn-primary" onclick="createInventory()">Create Item</button>
+                <div id="inv-create-msg"></div>
+            </div>
+            <div class="card">
+                <div class="card-header">
+                    <h3>📋 Inventory List</h3>
+                    <div class="form-row" style="margin-bottom:0;">
+                        <select id="inv-filter-type"><option value="">All Types</option><option value="CONSUMABLE">Consumable</option><option value="ASSET">Asset</option><option value="TOOL">Tool</option></select>
+                        <select id="inv-filter-campus"><option value="">All Campuses</option><option value="MC1">MC1</option><option value="MC2">MC2</option><option value="PAMPLONA">Pamplona</option></select>
+                        <select id="inv-filter-category"><option value="">All Categories</option></select>
+                        <select id="inv-filter-status"><option value="">All Statuses</option><option value="GOOD_CONDITION">Good Condition</option><option value="BORROWED">Borrowed</option><option value="UNDER_REPAIR">Under Repair</option><option value="DAMAGED">Damaged</option><option value="LOST">Lost</option><option value="FOR_DISPOSAL">For Disposal</option><option value="DISPOSED">Disposed</option><option value="RESERVED">Reserved</option></select>
+                        <input id="inv-filter-projectid" placeholder="Project ID" style="width:120px;">
+                        <button class="btn btn-outline btn-sm" onclick="fetchInventory()">🔍 Filter</button>
+                    </div>
+                </div>
+                <div class="table-wrap" id="inv-table-wrap"><div class="empty-state">Loading...</div></div>
+            </div>
+        </div>
+
+        <!-- ============ WORK REQUESTS TAB ============ -->
+        <div id="tab-workrequests" class="tab-content">
+            <div class="card">
+                <h3>➕ Create Work Request</h3>
+                <div class="form-row">
+                    <div class="form-group"><label>Request Type *</label><select id="wr-type"><option value="REGULAR_MAINTENANCE">Regular Maintenance</option><option value="REPAIR">Repair</option><option value="FABRICATION">Fabrication</option><option value="INSTALLATION">Installation</option><option value="REPLACEMENT">Replacement</option><option value="PLAN_DESIGN">Plan/Design</option><option value="BAYANIHAN">Bayanihan</option><option value="OTHERS">Others</option></select></div>
+                    <div class="form-group"><label>Campus *</label><select id="wr-campus"><option value="MC1">MC1</option><option value="MC2">MC2</option><option value="PAMPLONA">Pamplona</option></select></div>
+                    <div class="form-group"><label>Requesting Office</label><input id="wr-office" placeholder="Engineering Dept"></div>
+                    <div class="form-group"><label>Particulars</label><input id="wr-particulars" placeholder="Leaking faucet"></div>
+                    <div class="form-group"><label>Inventory Item</label><select id="wr-item"><option value="">— none —</option></select></div>
+                </div>
+                <div class="form-group"><label>Details (JSON)</label><textarea id="wr-details" placeholder='{"typeOfEquipment":"Aircon"}'></textarea></div>
+                <button class="btn btn-primary" onclick="createWorkRequest()">Create Work Request</button>
+                <div id="wr-create-msg"></div>
+            </div>
+            <div class="card">
+                <div class="card-header">
+                    <h3>📋 Work Requests</h3>
+                    <div style="display:flex; gap:0.5rem; align-items:center;">
+                        <label style="font-size:0.8rem;"><input type="checkbox" id="wr-my-only" onchange="fetchWorkRequests()"> My Requests</label>
+                        <button class="btn btn-outline btn-sm" onclick="fetchWorkRequests()">Refresh</button>
+                    </div>
+                </div>
+                <div class="table-wrap" id="wr-table-wrap"><div class="empty-state">Loading...</div></div>
+            </div>
+        </div>
+
+        <!-- ============ ISSUANCES TAB ============ -->
+        <div id="tab-issuances" class="tab-content">
+            <div class="card">
+                <h3>➕ Issue Item (Borrow)</h3>
+                <div class="form-row">
+                    <div class="form-group"><label>Inventory Item *</label><select id="iss-item"></select></div>
+                    <div class="form-group"><label>Quantity</label><input id="iss-qty" type="number" value="1"></div>
+                    <div class="form-group"><label>Borrower Name *</label><input id="iss-borrower"></div>
+                    <div class="form-group"><label>Student ID</label><input id="iss-studentid" placeholder="leave blank if external"></div>
+                    <div class="form-group"><label>Contact Number</label><input id="iss-contact" placeholder="required if no Student ID"></div>
+                    <div class="form-group"><label>Due Back At</label><input id="iss-dueback" type="date"></div>
+                </div>
+                <button class="btn btn-primary" onclick="createIssuance()">Issue Item</button>
+                <div id="iss-create-msg"></div>
+            </div>
+            <div class="card">
+                <div class="card-header">
+                    <h3>📋 Issuances</h3>
+                    <div class="form-row" style="margin-bottom:0;">
+                        <select id="iss-filter"><option value="">All</option><option value="true">Active only (not returned)</option></select>
+                        <button class="btn btn-outline btn-sm" onclick="fetchIssuances()">Refresh</button>
+                    </div>
+                </div>
+                <div class="table-wrap" id="iss-table-wrap"><div class="empty-state">Loading...</div></div>
+            </div>
+        </div>
+
+        <!-- ============ WITHDRAWALS TAB ============ -->
+        <div id="tab-withdrawals" class="tab-content">
+            <div class="card">
+                <h3>➕ Warehouse Withdrawal</h3>
+                <div class="form-row">
+                    <div class="form-group"><label>Inventory Item *</label><select id="wh-item"></select></div>
+                    <div class="form-group"><label>Quantity</label><input id="wh-qty" type="number" step="any" value="1"></div>
+                    <div class="form-group"><label>Withdrawn By *</label><input id="wh-name" placeholder="Name / Office"></div>
+                </div>
+                <button class="btn btn-primary" onclick="createWithdrawal()">Withdraw</button>
+                <div id="wh-create-msg"></div>
+            </div>
+            <div class="card">
+                <div class="card-header"><h3>📋 Withdrawals</h3><button class="btn btn-outline btn-sm" onclick="fetchWithdrawals()">Refresh</button></div>
+                <div class="table-wrap" id="wh-table-wrap"><div class="empty-state">Loading...</div></div>
+            </div>
+        </div>
+
+        <!-- ============ MAINTENANCE TAB ============ -->
+        <div id="tab-maintenance" class="tab-content">
+            <div class="card">
+                <h3>➕ Create Maintenance Schedule</h3>
+                <div class="form-row">
+                    <div class="form-group"><label>Title *</label><input id="ms-title" placeholder="Quarterly Aircon Cleaning"></div>
+                    <div class="form-group"><label>Inventory Item *</label><select id="ms-item"></select></div>
+                    <div class="form-group"><label>Frequency (days)</label><input id="ms-freq" type="number" value="90"></div>
+                    <div class="form-group"><label>Next Due At</label><input id="ms-due" type="date"></div>
+                </div>
+                <button class="btn btn-primary" onclick="createSchedule()">Create Schedule</button>
+                <div id="ms-create-msg"></div>
+            </div>
+            <div class="card">
+                <div class="card-header"><h3>📋 Schedules</h3><button class="btn btn-outline btn-sm" onclick="fetchSchedules()">Refresh</button></div>
+                <div class="table-wrap" id="ms-table-wrap"><div class="empty-state">Loading...</div></div>
+            </div>
+        </div>
+
+        <!-- ============ PROJECTS TAB ============ -->
+        <div id="tab-projects" class="tab-content">
+            <div class="card">
+                <h3>➕ Create Project</h3>
+                <div class="form-row">
+                    <div class="form-group"><label>Name *</label><input id="proj-name"></div>
+                    <div class="form-group"><label>Type *</label><select id="proj-type"><option value="CONSTRUCTION">Construction</option><option value="RENOVATION">Renovation</option><option value="FABRICATION">Fabrication</option></select></div>
+                    <div class="form-group"><label>Campus *</label><select id="proj-campus"><option value="MC1">MC1</option><option value="MC2">MC2</option><option value="PAMPLONA">Pamplona</option></select></div>
+                    <div class="form-group"><label>Description</label><input id="proj-desc"></div>
+                    <div class="form-group"><label>Start Date</label><input id="proj-start" type="date"></div>
+                    <div class="form-group"><label>End Date</label><input id="proj-end" type="date"></div>
+                </div>
+                <button class="btn btn-primary" onclick="createProject()">Create Project</button>
+                <div id="proj-create-msg"></div>
+            </div>
+            <div class="card">
+                <div class="card-header"><h3>📋 Projects</h3><button class="btn btn-outline btn-sm" onclick="fetchProjects()">Refresh</button></div>
+                <div class="table-wrap" id="proj-table-wrap"><div class="empty-state">Loading...</div></div>
+            </div>
+            <div class="card">
+                <h3>➕ Add Material Estimate Line</h3>
+                <div class="form-row">
+                    <div class="form-group"><label>Project *</label><select id="est-project"></select></div>
+                    <div class="form-group"><label>Category</label><input id="est-category" placeholder="Masonry Works"></div>
+                    <div class="form-group"><label>Item No.</label><input id="est-itemno" placeholder="1.1"></div>
+                    <div class="form-group"><label>Description *</label><input id="est-desc" placeholder="Portland Cement"></div>
+                    <div class="form-group"><label>Quantity</label><input id="est-qty" type="number" step="any"></div>
+                    <div class="form-group"><label>Unit</label><input id="est-unit" placeholder="BAGS"></div>
+                    <div class="form-group"><label>Unit Cost</label><input id="est-unitcost" type="number" step="any"></div>
+                </div>
+                <button class="btn btn-primary" onclick="createEstimate()">Add Estimate Line</button>
+                <div id="est-create-msg"></div>
+            </div>
+            <div class="card">
+                <div class="card-header">
+                    <h3>📋 Estimates</h3>
+                    <div class="form-row" style="margin-bottom:0;">
+                        <select id="est-view-project"><option value="">— Select Project —</option></select>
+                        <button class="btn btn-outline btn-sm" onclick="fetchEstimates()">Load</button>
+                    </div>
+                </div>
+                <div class="table-wrap" id="est-table-wrap"><div class="empty-state">Select a project to view estimates.</div></div>
+            </div>
+        </div>
+
+        <!-- ============ POSITIONS TAB ============ -->
+        <div id="tab-positions" class="tab-content">
+            <div class="card">
+                <div class="card-header"><h3>📋 Positions</h3><button class="btn btn-outline btn-sm" onclick="fetchPositions()">Refresh</button></div>
+                <p class="hint">Positions are read-only. Use Prisma Studio to add/edit.</p>
+                <div class="table-wrap" id="pos-table-wrap"><div class="empty-state">Loading...</div></div>
+            </div>
+        </div>
+
+        <!-- ============ USERS TAB ============ -->
+        <div id="tab-users" class="tab-content">
+            <div class="card">
+                <h3>➕ Create User</h3>
+                <div class="form-row">
+                    <div class="form-group"><label>Email *</label><input id="u-email" type="email"></div>
+                    <div class="form-group"><label>First Name *</label><input id="u-first"></div>
+                    <div class="form-group"><label>Last Name *</label><input id="u-last"></div>
+                    <div class="form-group"><label>Role ID *</label><input id="u-roleid" placeholder="Paste Role UUID"></div>
+                    <div class="form-group"><label>Position</label><select id="u-position"><option value="">— none —</option></select></div>
+                </div>
+                <p class="hint">Default password: <strong>staff@123</strong></p>
+                <button class="btn btn-primary" onclick="createUser()">Create User</button>
+                <div id="u-create-msg"></div>
+            </div>
+            <div class="card">
+                <div class="card-header"><h3>📋 Users</h3><button class="btn btn-outline btn-sm" onclick="fetchUsers()">Refresh</button></div>
+                <div class="table-wrap" id="users-table-wrap"><div class="empty-state">Loading...</div></div>
+            </div>
+        </div>
+
+        <!-- ============ AUDIT LOG TAB ============ -->
+        <div id="tab-audit" class="tab-content">
+            <div class="card">
+                <div class="card-header">
+                    <h3>📜 Audit Log</h3>
+                    <div class="form-row" style="margin-bottom:0;">
+                        <select id="audit-filter">
+                            <option value="">All Entity Types</option>
+                            <option value="InventoryItem">InventoryItem</option>
+                            <option value="User">User</option>
+                            <option value="WarehouseWithdrawal">WarehouseWithdrawal</option>
+                            <option value="ItemIssuance">ItemIssuance</option>
+                            <option value="WorkRequest">WorkRequest</option>
+                        </select>
+                        <input id="audit-entityid" placeholder="Entity ID" style="width:150px;">
+                        <button class="btn btn-outline btn-sm" onclick="fetchAuditLogs()">Load</button>
+                    </div>
+                </div>
+                <div class="table-wrap" id="audit-table-wrap"><div class="empty-state">Click Load to fetch audit logs.</div></div>
+            </div>
+        </div>
+
+        <!-- ============ NOTIFICATIONS TAB ============ -->
+        <div id="tab-notifications" class="tab-content">
+            <div class="card">
+                <div class="card-header">
+                    <h3>🔔 My Notifications</h3>
+                    <div>
+                        <button class="btn btn-outline btn-sm" onclick="fetchNotifications()">Load</button>
+                        <button class="btn btn-success btn-sm" onclick="markAllRead()">Mark All Read</button>
+                    </div>
+                </div>
+                <div class="table-wrap" id="notif-table-wrap"><div class="empty-state">Click Load to fetch notifications.</div></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+(function() {
+    let accessToken = '';
+    const $ = (sel) => document.querySelector(sel);
+    const $$ = (sel) => document.querySelectorAll(sel);
+    const apiBase = () => ($('#api-base')?.value || 'http://localhost:3000').replace(/\/$/, '');
+    const saveApiBase = () => localStorage.setItem('bg_api_base', $('#api-base').value);
+
+    function showMsg(id, msg, isError = false) {
+        const el = $(`#${id}`);
+        if (!el) return;
+        el.className = 'alert ' + (isError ? 'alert-error' : 'alert-success');
+        el.textContent = msg;
+        if (!isError) setTimeout(() => { el.textContent = ''; el.className = ''; }, 3500);
+    }
+
+    async function apiCall(method, path, body = null) {
+        const res = await fetch(apiBase() + path, {
+            method,
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${accessToken}` },
+            body: body ? JSON.stringify(body) : undefined,
+        });
+        if (res.status === 204) return { _status: 204 };
+        const text = await res.text();
+        let data;
+        try { data = JSON.parse(text); } catch { data = text; }
+        if (!res.ok) throw new Error((data && data.message) ? (Array.isArray(data.message) ? data.message.join(', ') : data.message) : `Request failed (${res.status})`);
+        return data;
+    }
+
+    function fillSelect(el, items, valueFn, labelFn, withEmpty = false) {
+        if (!el) return;
+        el.innerHTML = (withEmpty ? '<option value="">— none —</option>' : '') + items.map(i => `<option value="${valueFn(i)}">${labelFn(i)}</option>`).join('');
+    }
+
+    function renderTable(wrapId, data, columns, actionFn = null) {
+        const wrap = $(`#${wrapId}`);
+        if (!wrap) return;
+        if (!Array.isArray(data) || data.length === 0) {
+            wrap.innerHTML = '<div class="empty-state">No data found.</div>';
+            return;
+        }
+        let html = '<table><thead><tr>';
+        columns.forEach(c => html += `<th>${c.label || c}</th>`);
+        if (actionFn) html += '<th>Actions</th>';
+        html += '</tr></thead><tbody>';
+        data.forEach((row, idx) => {
+            html += '<tr>';
+            columns.forEach(c => {
+                const key = typeof c === 'string' ? c : c.key;
+                let val = row[key];
+                if (val === null || val === undefined) val = '';
+                else if (typeof val === 'boolean') val = val ? '✅' : '❌';
+                else if (typeof val === 'object') val = JSON.stringify(val);
+                html += `<td>${String(val).replace(/</g,'&lt;').replace(/>/g,'&gt;')}</td>`;
+            });
+            if (actionFn) html += `<td>${actionFn(row, idx)}</td>`;
+            html += '</tr>';
+        });
+        html += '</tbody></table>';
+        wrap.innerHTML = html;
+    }
+
+    // ── Auth ──
+    async function doLogin() {
+        const email = $('#login-email').value.trim();
+        const password = $('#login-password').value;
+        const errEl = $('#login-error');
+        errEl.style.display = 'none';
+        try {
+            const res = await fetch(apiBase() + '/auth/login', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ email, password }),
+            });
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.message || 'Login failed');
+            accessToken = data.accessToken;
+            sessionStorage.setItem('bg_accessToken', accessToken);
+            // Store user display info
+            const user = data.user;
+            const displayName = user.name || (user.firstName + ' ' + user.lastName).trim() || user.email;
+            sessionStorage.setItem('bg_userDisplay', displayName + ` (${user.role})`);
+            showDashboard();
+        } catch (e) {
+            errEl.textContent = '❌ ' + e.message;
+            errEl.style.display = 'block';
+        }
+    }
+
+    function showDashboard() {
+        $('#login-screen').style.display = 'none';
+        $('#dashboard-screen').style.display = 'block';
+        const storedName = sessionStorage.getItem('bg_userDisplay') || 'User';
+        $('#user-display').textContent = '👤 ' + storedName;
+        loadAllLookups();
+        switchTab('inventory');
+    }
+
+    function doLogout() {
+        accessToken = '';
+        sessionStorage.removeItem('bg_accessToken');
+        sessionStorage.removeItem('bg_userDisplay');
+        $('#login-screen').style.display = 'block';
+        $('#dashboard-screen').style.display = 'none';
+    }
+
+    // ── Init ──
+    const savedBase = localStorage.getItem('bg_api_base');
+    if (savedBase) { const inp = $('#api-base'); if (inp) inp.value = savedBase; }
+    const savedToken = sessionStorage.getItem('bg_accessToken');
+    if (savedToken) {
+        accessToken = savedToken;
+        fetch(apiBase() + '/auth/me', { method: 'POST', headers: { 'Authorization': `Bearer ${accessToken}` } })
+            .then(r => r.json())
+            .then(data => {
+                if (data && data.userId) {
+                    // We don't get full name from /auth/me, so rely on stored display name
+                    showDashboard();
+                } else {
+                    doLogout();
+                }
+            })
+            .catch(doLogout);
+    }
+
+    // ── Tabs ──
+    $$('.nav-tab').forEach(btn => btn.addEventListener('click', () => switchTab(btn.dataset.tab)));
+    function switchTab(tabName) {
+        $$('.nav-tab').forEach(b => b.classList.remove('active'));
+        $$('.tab-content').forEach(c => c.classList.remove('active'));
+        const tabBtn = document.querySelector(`.nav-tab[data-tab="${tabName}"]`);
+        if (tabBtn) tabBtn.classList.add('active');
+        const tabContent = $(`#tab-${tabName}`);
+        if (tabContent) tabContent.classList.add('active');
+        const loaders = { inventory: fetchInventory, workrequests: fetchWorkRequests, issuances: fetchIssuances, withdrawals: fetchWithdrawals, maintenance: fetchSchedules, projects: fetchProjects, positions: fetchPositions, users: fetchUsers };
+        if (loaders[tabName]) loaders[tabName]();
+    }
+
+    // ── Lookups ──
+    async function loadAllLookups() {
+        try {
+            const cats = await apiCall('GET', '/inventory/categories');
+            fillSelect($('#inv-category'), cats, c => c.id, c => c.name, true);
+            fillSelect($('#inv-filter-category'), cats, c => c.id, c => c.name, true);
+        } catch(e){}
+        try {
+            const positions = await apiCall('GET', '/positions');
+            fillSelect($('#u-position'), positions, p => p.id, p => p.name, true);
+        } catch(e){}
+        await refreshInventoryCache();
+        await refreshProjectsCache();
+    }
+
+    async function refreshInventoryCache() {
+        try {
+            const data = await apiCall('GET', '/inventory');
+            inventoryCache = data;
+            const opts = data.map(i => ({ id: i.id, label: `${i.name} (${i.type}, qty ${i.quantity})` }));
+            ['wr-item','iss-item','wh-item','ms-item'].forEach(id => {
+                const el = $(`#${id}`);
+                if (el) fillSelect(el, opts, o => o.id, o => o.label, id === 'wr-item');
+            });
+        } catch(e){}
+    }
+
+    let inventoryCache = [];
+    let projectsCache = [];
+    async function refreshProjectsCache() {
+        try {
+            projectsCache = await apiCall('GET', '/projects');
+            const opts = projectsCache.map(p => ({ id: p.id, label: `${p.name} (${p.type})` }));
+            fillSelect($('#est-project'), opts, o => o.id, o => o.label, false);
+            fillSelect($('#est-view-project'), opts, o => o.id, o => o.label, true);
+        } catch(e){}
+    }
+
+    // ── INVENTORY ──
+    async function fetchInventory() {
+        const params = new URLSearchParams();
+        const type = $('#inv-filter-type')?.value;
+        const campus = $('#inv-filter-campus')?.value;
+        const categoryId = $('#inv-filter-category')?.value;
+        const status = $('#inv-filter-status')?.value;
+        const projectId = $('#inv-filter-projectid')?.value.trim();
+        if (type) params.set('type', type);
+        if (campus) params.set('campus', campus);
+        if (categoryId) params.set('categoryId', categoryId);
+        if (status) params.set('status', status);
+        if (projectId) params.set('projectId', projectId);
+        const qs = params.toString();
+        try {
+            const data = await apiCall('GET', '/inventory' + (qs ? '?'+qs : ''));
+            inventoryCache = data;
+            renderTable('inv-table-wrap', data, [
+                { key:'name', label:'Name' }, { key:'type', label:'Type' }, { key:'campus', label:'Campus' },
+                { key:'quantity', label:'Qty' }, { key:'unit', label:'Unit' }, { key:'location', label:'Location' },
+                { key:'propertyNumber', label:'Prop No.' }, { key:'status', label:'Status' }
+            ], (row) => `
+                <button class="btn btn-outline btn-xs" onclick="viewStockHistory('${row.id}')">Hist</button>
+                <button class="btn btn-outline btn-xs" onclick="adjustQuantity('${row.id}')">Adj</button>
+                <button class="btn btn-outline btn-xs" onclick="changeItemStatus('${row.id}')">Stat</button>
+                <button class="btn btn-danger btn-xs" onclick="deleteInventory('${row.id}')">Del</button>
+            `);
+        } catch(e) { showMsg('inv-create-msg', e.message, true); }
+    }
+
+    async function createInventory() {
+        const body = {
+            name: $('#inv-name').value,
+            type: $('#inv-type').value,
+            campus: $('#inv-campus').value,
+            quantity: parseFloat($('#inv-qty').value)||1,
+            unit: $('#inv-unit').value||undefined,
+            location: $('#inv-location').value||undefined,
+            propertyNumber: $('#inv-propnum').value||undefined,
+            serialNumber: $('#inv-serial').value||undefined,
+            unitCost: $('#inv-unitcost').value ? parseFloat($('#inv-unitcost').value) : undefined,
+            projectId: $('#inv-projectid').value||undefined,
+            categoryId: $('#inv-category').value||undefined,
+        };
+        try { await apiCall('POST', '/inventory', body); showMsg('inv-create-msg','✅ Created!'); fetchInventory(); refreshInventoryCache(); }
+        catch(e) { showMsg('inv-create-msg', e.message, true); }
+    }
+
+    async function deleteInventory(id) {
+        if(!confirm('Deactivate this item?')) return;
+        try { await apiCall('DELETE', '/inventory/'+id); fetchInventory(); } catch(e) { alert(e.message); }
+    }
+
+    async function adjustQuantity(id) {
+        const qty = prompt('New quantity:');
+        if(qty===null) return;
+        const reason = prompt('Reason:','Physical count correction');
+        try { await apiCall('PATCH', `/inventory/${id}/adjust`, { newQuantity: parseFloat(qty), reason }); fetchInventory(); }
+        catch(e) { alert(e.message); }
+    }
+
+    async function changeItemStatus(id) {
+        const statuses = ['GOOD_CONDITION','BORROWED','UNDER_REPAIR','DAMAGED','LOST','FOR_DISPOSAL','DISPOSED','RESERVED'];
+        const newStatus = prompt('New status ('+statuses.join(', ')+'):');
+        if(!newStatus) return;
+        try { await apiCall('PATCH', `/inventory/${id}/status`, { status: newStatus }); fetchInventory(); }
+        catch(e) { alert(e.message); }
+    }
+
+    async function viewStockHistory(id) {
+        try {
+            const data = await apiCall('GET', `/inventory/${id}/stock-history`);
+            alert(data.map(m => `${m.movementType} | change ${m.quantityChange} → after ${m.quantityAfter} | ${new Date(m.createdAt).toLocaleString()}`).join('\n') || 'No history.');
+        } catch(e) { alert(e.message); }
+    }
+
+    // ── WORK REQUESTS ──
+    async function fetchWorkRequests() {
+        const myOnly = $('#wr-my-only')?.checked;
+        const path = myOnly ? '/work-requests/my' : '/work-requests';
+        try {
+            const data = await apiCall('GET', path);
+            renderTable('wr-table-wrap', data, [
+                { key:'referenceNo', label:'Ref No.' }, { key:'requestType', label:'Type' }, { key:'campus', label:'Campus' },
+                { key:'requestingOffice', label:'Office' }, { key:'status', label:'Status' }, { key:'progressPercent', label:'Progress' }
+            ], (row) => `
+                <button class="btn btn-outline btn-xs" onclick="assignWorkRequest('${row.id}')">Assign</button>
+                <button class="btn btn-success btn-xs" onclick="acceptWorkRequest('${row.id}')">Accept</button>
+                <button class="btn btn-primary btn-xs" onclick="completeWorkRequest('${row.id}')">Complete</button>
+                <button class="btn btn-outline btn-xs" onclick="updateProgress('${row.id}')">Prog</button>
+            `);
+        } catch(e) { showMsg('wr-create-msg', e.message, true); }
+    }
+
+    async function createWorkRequest() {
+        let details;
+        const raw = $('#wr-details').value.trim();
+        if(raw) { try { details = JSON.parse(raw); } catch { return showMsg('wr-create-msg','Invalid JSON',true); } }
+        const body = {
+            requestType: $('#wr-type').value,
+            campus: $('#wr-campus').value,
+            requestingOffice: $('#wr-office').value,
+            particulars: $('#wr-particulars').value||undefined,
+            inventoryItemId: $('#wr-item').value||undefined,
+            details,
+        };
+        try { await apiCall('POST', '/work-requests', body); showMsg('wr-create-msg','✅ Created!'); fetchWorkRequests(); }
+        catch(e) { showMsg('wr-create-msg', e.message, true); }
+    }
+
+    async function assignWorkRequest(id) {
+        const userId = prompt('Staff User ID:');
+        if(!userId) return;
+        const role = prompt('Role on task:','Technician');
+        const deadline = prompt('Deadline (YYYY-MM-DD):')||undefined;
+        try { await apiCall('PATCH', `/work-requests/${id}/assign`, { userId, role, deadline }); fetchWorkRequests(); }
+        catch(e) { alert(e.message); }
+    }
+
+    async function acceptWorkRequest(id) { try { await apiCall('PATCH', `/work-requests/${id}/accept`); fetchWorkRequests(); } catch(e) { alert(e.message); } }
+    async function completeWorkRequest(id) {
+        const rating = prompt('Service rating 1-5:');
+        const comments = prompt('Comments:');
+        try { await apiCall('PATCH', `/work-requests/${id}/complete`, { serviceRating: rating?parseInt(rating):undefined, comments: comments||undefined }); fetchWorkRequests(); }
+        catch(e) { alert(e.message); }
+    }
+
+    async function updateProgress(id) {
+        const prog = prompt('New progress percent (0-100):');
+        if(prog===null) return;
+        try { await apiCall('PATCH', `/work-requests/${id}/progress`, { progressPercent: parseInt(prog) }); fetchWorkRequests(); }
+        catch(e) { alert(e.message); }
+    }
+
+    // ── ISSUANCES ──
+    async function fetchIssuances() {
+        const activeOnly = $('#iss-filter')?.value;
+        const qs = activeOnly ? `?activeOnly=${activeOnly}` : '';
+        try {
+            const data = await apiCall('GET', '/issuances'+qs);
+            renderTable('iss-table-wrap', data, [
+                { key:'controlNumber', label:'Control No.' },
+                { key:'inventoryItem', label:'Item', render: v=>v?.name||'' },
+                { key:'borrowerName', label:'Borrower' },
+                { key:'issuedAt', label:'Issued', render: v=>v?new Date(v).toLocaleDateString():'' },
+                { key:'returnedAt', label:'Returned', render: v=>v?new Date(v).toLocaleDateString():'—' }
+            ], (row) => row.returnedAt ? '' : `<button class="btn btn-success btn-xs" onclick="returnIssuance('${row.id}')">Return</button>`);
+        } catch(e) { showMsg('iss-create-msg', e.message, true); }
+    }
+
+    async function createIssuance() {
+        const body = {
+            inventoryItemId: $('#iss-item').value,
+            quantity: parseInt($('#iss-qty').value)||1,
+            borrowerName: $('#iss-borrower').value,
+            studentId: $('#iss-studentid').value||undefined,
+            contactNumber: $('#iss-contact').value||undefined,
+            dueBackAt: $('#iss-dueback').value||undefined,
+        };
+        try { await apiCall('POST', '/issuances', body); showMsg('iss-create-msg','✅ Issued!'); fetchIssuances(); }
+        catch(e) { showMsg('iss-create-msg', e.message, true); }
+    }
+
+    async function returnIssuance(id) { try { await apiCall('PATCH', `/issuances/${id}/return`); fetchIssuances(); } catch(e) { alert(e.message); } }
+
+    // ── WITHDRAWALS ──
+    async function fetchWithdrawals() {
+        try {
+            const data = await apiCall('GET', '/withdrawals');
+            renderTable('wh-table-wrap', data, [
+                { key:'issuanceSlipNo', label:'Slip No.' },
+                { key:'inventoryItem', label:'Item', render: v=>v?.name||'' },
+                { key:'quantity', label:'Qty' },
+                { key:'withdrawnByName', label:'Withdrawn By' },
+                { key:'withdrawnAt', label:'Date', render: v=>v?new Date(v).toLocaleString():'' }
+            ]);
+        } catch(e) { showMsg('wh-create-msg', e.message, true); }
+    }
+
+    async function createWithdrawal() {
+        const body = {
+            inventoryItemId: $('#wh-item').value,
+            quantity: parseFloat($('#wh-qty').value)||1,
+            withdrawnByName: $('#wh-name').value,
+        };
+        try { await apiCall('POST', '/withdrawals', body); showMsg('wh-create-msg','✅ Withdrawn!'); fetchWithdrawals(); refreshInventoryCache(); }
+        catch(e) { showMsg('wh-create-msg', e.message, true); }
+    }
+
+    // ── MAINTENANCE ──
+    async function fetchSchedules() {
+        try {
+            const data = await apiCall('GET', '/maintenance-schedules');
+            renderTable('ms-table-wrap', data, [
+                { key:'title', label:'Title' },
+                { key:'inventoryItem', label:'Item', render: v=>v?.name||'' },
+                { key:'frequencyDays', label:'Freq (days)' },
+                { key:'nextDueAt', label:'Next Due', render: v=>v?new Date(v).toLocaleDateString():'' }
+            ], (row) => `<button class="btn btn-danger btn-xs" onclick="deactivateSchedule('${row.id}')">Deactivate</button>`);
+        } catch(e) { showMsg('ms-create-msg', e.message, true); }
+    }
+
+    async function createSchedule() {
+        const body = {
+            title: $('#ms-title').value,
+            inventoryItemId: $('#ms-item').value,
+            frequencyDays: parseInt($('#ms-freq').value),
+            nextDueAt: $('#ms-due').value,
+        };
+        try { await apiCall('POST', '/maintenance-schedules', body); showMsg('ms-create-msg','✅ Created!'); fetchSchedules(); }
+        catch(e) { showMsg('ms-create-msg', e.message, true); }
+    }
+
+    async function deactivateSchedule(id) { try { await apiCall('PATCH', `/maintenance-schedules/${id}/deactivate`); fetchSchedules(); } catch(e) { alert(e.message); } }
+
+    // ── PROJECTS ──
+    async function fetchProjects() {
+        try {
+            const data = await apiCall('GET', '/projects');
+            projectsCache = data;
+            renderTable('proj-table-wrap', data, [
+                { key:'name', label:'Name' }, { key:'type', label:'Type' }, { key:'campus', label:'Campus' },
+                { key:'status', label:'Status' }, { key:'estimateControlNo', label:'Est. Control No.' }
+            ]);
+            refreshProjectsCache();
+        } catch(e) { showMsg('proj-create-msg', e.message, true); }
+    }
+
+    async function createProject() {
+        const body = {
+            name: $('#proj-name').value, type: $('#proj-type').value, campus: $('#proj-campus').value,
+            description: $('#proj-desc').value||undefined,
+            startDate: $('#proj-start').value||undefined, endDate: $('#proj-end').value||undefined
+        };
+        try { await apiCall('POST', '/projects', body); showMsg('proj-create-msg','✅ Created!'); fetchProjects(); }
+        catch(e) { showMsg('proj-create-msg', e.message, true); }
+    }
+
+    async function createEstimate() {
+        const body = {
+            projectId: $('#est-project').value,
+            category: $('#est-category').value||undefined,
+            itemNo: $('#est-itemno').value||undefined,
+            description: $('#est-desc').value,
+            quantity: parseFloat($('#est-qty').value),
+            unit: $('#est-unit').value,
+            unitCost: parseFloat($('#est-unitcost').value),
+        };
+        try { await apiCall('POST', '/projects/estimates', body); showMsg('est-create-msg','✅ Added!'); }
+        catch(e) { showMsg('est-create-msg', e.message, true); }
+    }
+
+    async function fetchEstimates() {
+        const projectId = $('#est-view-project').value;
+        if(!projectId) return;
+        try {
+            const data = await apiCall('GET', `/projects/${projectId}/estimates`);
+            renderTable('est-table-wrap', data, ['category','itemNo','description','quantity','unit','unitCost','amount']);
+        } catch(e) { alert(e.message); }
+    }
+
+    // ── POSITIONS ──
+    async function fetchPositions() {
+        try { const data = await apiCall('GET', '/positions'); renderTable('pos-table-wrap', data, ['name','description']); }
+        catch(e) { alert(e.message); }
+    }
+
+    // ── USERS ──
+    async function fetchUsers() {
+        try {
+            const data = await apiCall('GET', '/auth/users');
+            renderTable('users-table-wrap', data, [
+                { key:'id', label:'ID' }, { key:'firstName', label:'First' }, { key:'lastName', label:'Last' },
+                { key:'email', label:'Email' }, { key:'role', label:'Role', render: v=>v?.name||'' },
+                { key:'position', label:'Position', render: v=>v?.name||'' }, { key:'isActive', label:'Active' }
+            ], (row) => `
+                <button class="btn btn-outline btn-xs" onclick="changeUserRole('${row.id}')">Role</button>
+                <button class="btn btn-danger btn-xs" onclick="deactivateUser('${row.id}')">Deact</button>
+            `);
+        } catch(e) { alert(e.message); }
+    }
+
+    async function createUser() {
+        const body = {
+            email: $('#u-email').value,
+            firstName: $('#u-first').value,
+            lastName: $('#u-last').value,
+            roleId: $('#u-roleid').value,
+            positionId: $('#u-position').value||undefined
+        };
+        try { await apiCall('POST', '/auth/users', body); showMsg('u-create-msg','✅ Created! Default password: staff@123'); fetchUsers(); }
+        catch(e) { showMsg('u-create-msg', e.message, true); }
+    }
+
+    async function changeUserRole(id) {
+        const roleId = prompt('New Role ID:');
+        if(!roleId) return;
+        try { await apiCall('PATCH', `/auth/users/${id}/role`, { roleId }); fetchUsers(); } catch(e) { alert(e.message); }
+    }
+
+    async function deactivateUser(id) {
+        if(!confirm('Deactivate this user?')) return;
+        try { await apiCall('PATCH', `/auth/users/${id}/deactivate`); fetchUsers(); } catch(e) { alert(e.message); }
+    }
+
+    // ── AUDIT LOG ──
+    async function fetchAuditLogs() {
+        const entityType = $('#audit-filter')?.value;
+        const entityId = $('#audit-entityid')?.value.trim();
+        const params = new URLSearchParams();
+        if(entityType) params.set('entityType', entityType);
+        if(entityId) params.set('entityId', entityId);
+        const qs = params.toString();
+        try {
+            const data = await apiCall('GET', '/audit-log' + (qs ? '?'+qs : ''));
+            renderTable('audit-table-wrap', data, [
+                { key:'action', label:'Action' }, { key:'entityType', label:'Entity' },
+                { key:'description', label:'Description' }, { key:'performedBy', label:'User', render: v=>v?.email||'' },
+                { key:'createdAt', label:'Date', render: v=>v?new Date(v).toLocaleString():'' }
+            ]);
+        } catch(e) { alert(e.message); }
+    }
+
+    // ── NOTIFICATIONS ──
+    async function fetchNotifications() {
+        try { const data = await apiCall('GET', '/notifications'); renderTable('notif-table-wrap', data, ['title','message', { key:'isRead', label:'Read' }, { key:'createdAt', label:'Date', render: v=>v?new Date(v).toLocaleString():'' }]); }
+        catch(e) { alert(e.message); }
+    }
+
+    async function markAllRead() { try { await apiCall('PATCH', '/notifications/read-all'); fetchNotifications(); } catch(e) { alert(e.message); } }
+
+    // Expose to global scope
+    window.doLogin = doLogin; window.doLogout = doLogout; window.saveApiBase = saveApiBase;
+    window.fetchInventory = fetchInventory; window.createInventory = createInventory; window.deleteInventory = deleteInventory; window.adjustQuantity = adjustQuantity; window.changeItemStatus = changeItemStatus; window.viewStockHistory = viewStockHistory;
+    window.fetchWorkRequests = fetchWorkRequests; window.createWorkRequest = createWorkRequest; window.assignWorkRequest = assignWorkRequest; window.acceptWorkRequest = acceptWorkRequest; window.completeWorkRequest = completeWorkRequest; window.updateProgress = updateProgress;
+    window.fetchIssuances = fetchIssuances; window.createIssuance = createIssuance; window.returnIssuance = returnIssuance;
+    window.fetchWithdrawals = fetchWithdrawals; window.createWithdrawal = createWithdrawal;
+    window.fetchSchedules = fetchSchedules; window.createSchedule = createSchedule; window.deactivateSchedule = deactivateSchedule;
+    window.fetchProjects = fetchProjects; window.createProject = createProject; window.createEstimate = createEstimate; window.fetchEstimates = fetchEstimates;
+    window.fetchPositions = fetchPositions;
+    window.fetchUsers = fetchUsers; window.createUser = createUser; window.changeUserRole = changeUserRole; window.deactivateUser = deactivateUser;
+    window.fetchAuditLogs = fetchAuditLogs;
+    window.fetchNotifications = fetchNotifications; window.markAllRead = markAllRead;
+})();
+</script>
+</body>
+</html>
