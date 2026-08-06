@@ -1,4 +1,3 @@
-// src/inventory/dto/update-status.dto.ts
 import { IsEnum } from 'class-validator';
 import { ItemStatus } from '@prisma/client';
 

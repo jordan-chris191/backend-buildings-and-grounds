@@ -1,4 +1,3 @@
-// src/inventory/dto/adjust-quantity.dto.ts
 import { IsNumber, IsString, Min } from 'class-validator';
 
 export class AdjustQuantityDto {

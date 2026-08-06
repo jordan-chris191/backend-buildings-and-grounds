@@ -1,12 +1,11 @@
-// src/audit-log/audit-log.service.ts
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 
 @Injectable()
 export class AuditLogService {
-  constructor(private prisma: PrismaService) {}
+  constructor(private readonly prisma: PrismaService) {}
 
-  async log(params: {
+  async log(data: {
     action: string;
     entityType: string;
     entityId: string;
@@ -16,12 +15,12 @@ export class AuditLogService {
   }) {
     return this.prisma.auditLog.create({
       data: {
-        action: params.action,
-        entityType: params.entityType,
-        entityId: params.entityId,
-        description: params.description,
-        metadata: params.metadata,
-        performedById: params.performedById,
+        action: data.action,
+        entityType: data.entityType,
+        entityId: data.entityId,
+        description: data.description,
+        metadata: data.metadata,
+        performedById: data.performedById,
       },
     });
   }
@@ -29,12 +28,19 @@ export class AuditLogService {
   async findAll(entityType?: string, entityId?: string) {
     return this.prisma.auditLog.findMany({
       where: {
-        ...(entityType ? { entityType } : {}),
-        ...(entityId ? { entityId } : {}),
+        ...(entityType && { entityType }),
+        ...(entityId && { entityId }),
+      },
+      include: {
+        performedBy: {
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+          },
+        },
       },
       orderBy: { createdAt: 'desc' },
-      include: { performedBy: true },
-      take: 200,
     });
   }
 }

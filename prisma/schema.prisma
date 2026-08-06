@@ -1,539 +1,642 @@
 generator client {
-  provider = "prisma-client-js"
+provider = "prisma-client-js"
 }
-
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+provider = "postgresql"
+url      = env("DATABASE_URL")
 }
-
 // =========================================================
 // AUTH
 // =========================================================
-
 model Role {
-  id          String  @id @default(uuid())
-  name        String  @unique   // "Administrator", "Building & Grounds Officer", "Property Custodian", "Faculty", "Campus Staff"
-  description String?
-  users       User[]
+id          String  @id @default(uuid())
+name        String  @unique
+description String?
+isActive    Boolean @default(true)
+users       User[]  @relation("UserRole")
+createdAt DateTime @default(now())
+updatedAt DateTime @updatedAt
 }
 
 model User {
-  id           String  @id @default(uuid())
-  email        String  @unique
-  passwordHash String
-  firstName    String
-  lastName     String
-  isActive     Boolean @default(true)
+id           String  @id @default(uuid())
+email        String  @unique
+passwordHash String
+firstName    String
+lastName     String
+isActive     Boolean @default(true)
+lastLoginAt         DateTime?
+failedLoginAttempts Int       @default(0)
+lockedUntil         DateTime?
+createdAt DateTime @default(now())
+updatedAt DateTime @updatedAt
+roleId String
+role   Role   @relation("UserRole", fields: [roleId], references: [id], onDelete: Restrict)
 
-  // Security
-  lastLoginAt         DateTime?
-  failedLoginAttempts Int       @default(0)
-  lockedUntil         DateTime?
+officeId String?
+  office   Office? @relation("UserOffice", fields: [officeId], references: [id], onDelete: SetNull)
 
-  // Audit
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  roleId String
-  role   Role   @relation(fields: [roleId], references: [id], onDelete: Restrict)
-
-  refreshTokens       RefreshToken[]
-  passwordResetTokens PasswordResetToken[]
-  notifications       Notification[]
-
-  requestedWorkRequests  WorkRequest[]               @relation("RequestedWorkRequests")
-  assignedWorkRequests   WorkRequest[]               @relation("AssignedWorkRequests")
-  workRequestAssignments WorkRequestAssignment[]
-  accomplishments        WorkRequestAccomplishment[]
-
-  issuancesAsCustodian   ItemIssuance[]        @relation("IssuanceCustodian")
-  withdrawalsAsCustodian WarehouseWithdrawal[] @relation("WithdrawalCustodian")
-
-  requestedPurchaseRequests PurchaseRequest[] @relation("RequestedPurchaseRequests")
-  approvedPurchaseRequests  PurchaseRequest[] @relation("ApprovedPurchaseRequests")
-
-  createdMaintenanceSchedules MaintenanceSchedule[]
-
-  stockMovementsPerformed StockMovement[]
-
-  auditLogs AuditLog[]
-
-  @@index([roleId])
-
-  positionId String?
-  position   Position? @relation(fields: [positionId], references: [id])
-
-  @@index([positionId])
+refreshTokens       RefreshToken[]       @relation("UserRefreshTokens")
+passwordResetTokens PasswordResetToken[] @relation("UserPasswordResetTokens")
+notifications       Notification[]       @relation("UserNotifications")
+requestedWorkRequests  WorkRequest[]               @relation("RequestedWorkRequests")
+workRequestAssignments WorkRequestAssignment[]     @relation("WorkRequestAssignmentUser")
+accomplishments        WorkRequestAccomplishment[] @relation("AccomplishmentPersonnel")
+transactionsAsCustodian ItemTransaction[] @relation("TransactionCustodian")
+requestedPurchaseRequests PurchaseRequest[] @relation("RequestedPurchaseRequests")
+approvedPurchaseRequests  PurchaseRequest[] @relation("ApprovedPurchaseRequests")
+createdMaintenanceSchedules MaintenanceSchedule[] @relation("MaintenanceCreator")
+stockMovementsPerformed StockMovement[] @relation("StockMovementPerformer")
+auditLogs AuditLog[] @relation("AuditPerformer")
+transfersInitiated AssetTransfer[] @relation("TransferredBy")
+transfersApproved  AssetTransfer[] @relation("ApprovedTransfer")
+transfersReceived  AssetTransfer[] @relation("ReceivedTransfer")
+borrowRequestsRequested BorrowRequest[] @relation("BorrowRequester")
+borrowRequestsApproved  BorrowRequest[] @relation("BorrowApprover")
+positionId String?
+position   Position? @relation("PositionUsers", fields: [positionId], references: [id], onDelete: SetNull)
+@@index([roleId])
+@@index([positionId])
+@@index([officeId])
 }
 
 model RefreshToken {
-  id        String    @id @default(uuid())
-  tokenHash String    @unique
-  expiresAt DateTime
-  revokedAt DateTime?
-  createdAt DateTime  @default(now())
-
-  userId String
-  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@index([userId])
-  @@index([expiresAt])
+id        String    @id @default(uuid())
+tokenHash String    @unique
+expiresAt DateTime
+revokedAt DateTime?
+createdAt DateTime  @default(now())
+userId String
+user   User   @relation("UserRefreshTokens", fields: [userId], references: [id], onDelete: Cascade)
+@@index([userId])
+@@index([expiresAt])
 }
-
 model PasswordResetToken {
-  id        String    @id @default(uuid())
-  tokenHash String    @unique
-  expiresAt DateTime
-  usedAt    DateTime?
-  createdAt DateTime  @default(now())
-
-  userId String
-  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@index([userId])
-  @@index([expiresAt])
+id        String    @id @default(uuid())
+tokenHash String    @unique
+expiresAt DateTime
+usedAt    DateTime?
+createdAt DateTime  @default(now())
+userId String
+user   User   @relation("UserPasswordResetTokens", fields: [userId], references: [id], onDelete: Cascade)
+@@index([userId])
+@@index([expiresAt])
 }
-
 // =========================================================
 // NOTIFICATIONS
 // =========================================================
-
 model Notification {
-  id        String   @id @default(uuid())
-  title     String
-  message   String
-  isRead    Boolean  @default(false)
-  createdAt DateTime @default(now())
+id        String   @id @default(uuid())
+title     String
+message   String
+isRead    Boolean  @default(false)
+createdAt DateTime @default(now())
+userId String
+user   User   @relation("UserNotifications", fields: [userId], references: [id], onDelete: Cascade)
+workRequestId String?
+workRequest   WorkRequest? @relation("WorkRequestNotifications", fields: [workRequestId], references: [id], onDelete: Cascade)
+@@index([userId])
+@@index([isRead])
+}
+// =========================================================
+// OFFICE
+// =========================================================
+model Office {
+id          String   @id @default(uuid())
+name        String
+campus      Campus
+description String?
+isActive    Boolean  @default(true)
+createdAt   DateTime @default(now())
+updatedAt   DateTime @updatedAt
+workRequests     WorkRequest[]     @relation("OfficeWorkRequests")
+purchaseRequests PurchaseRequest[] @relation("OfficePurchaseRequests")
 
-  userId String
-  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  workRequestId String?
-  workRequest   WorkRequest? @relation(fields: [workRequestId], references: [id])
-
-  @@index([userId])
-  @@index([isRead])
+  users User[] @relation("UserOffice")
+  
+@@unique([name, campus])
+@@index([campus])
+}
+// =========================================================
+// PERSON
+// =========================================================
+enum PersonType {
+STUDENT
+STAFF
+VISITOR
+EXTERNAL
+CONTRACTOR
+}
+model Person {
+id            String     @id @default(uuid())
+firstName     String
+lastName      String
+studentId     String?    @unique
+contactNumber String?
+type          PersonType @default(EXTERNAL)
+isActive      Boolean    @default(true)
+createdAt     DateTime   @default(now())
+updatedAt     DateTime   @updatedAt
+transactions ItemTransaction[] @relation("PersonTransactions")
+@@index([studentId])
+@@index([type])
+@@index([lastName])
+}
+// =========================================================
+// POSITION
+// =========================================================
+model Position {
+id          String  @id @default(uuid())
+name        String  @unique
+description String?
+isActive    Boolean @default(true)
+users       User[]  @relation("PositionUsers")
+createdAt DateTime @default(now())
+updatedAt DateTime @updatedAt
+}
+// =========================================================
+// BUDGET
+// =========================================================
+enum Trade {
+CARPENTRY
+ELECTRICAL
+PLUMBING
+MASONRY
+PAINTING
+METALWORK
+GENERAL
+}
+model AnnualBudget {
+id          String   @id @default(uuid())
+year        Int      @unique
+totalAmount Decimal  @db.Decimal(19, 4)
+description String?
+isActive    Boolean  @default(true)
+allocations BudgetAllocation[] @relation("BudgetAllocations")
+createdAt DateTime @default(now())
+updatedAt DateTime @updatedAt
+}
+model BudgetAllocation {
+id              String  @id @default(uuid())
+name            String
+trade           Trade
+allocatedAmount Decimal @db.Decimal(19, 4)
+annualBudgetId String
+annualBudget   AnnualBudget @relation("BudgetAllocations", fields: [annualBudgetId], references: [id], onDelete: Restrict)
+projectId String?
+project   Project? @relation("ProjectBudgetAllocations", fields: [projectId], references: [id], onDelete: SetNull)
+purchaseRequests PurchaseRequest[] @relation("PurchaseRequestBudget")
+isActive Boolean @default(true)
+createdAt DateTime @default(now())
+updatedAt DateTime @updatedAt
+@@index([annualBudgetId])
+@@index([projectId])
+@@index([trade])
 }
 
-// =================================1========================
+// =========================================================
 // INVENTORY
 // =========================================================
-
 enum ItemStatus {
-  GOOD_CONDITION
-  BORROWED
-  UNDER_REPAIR
-  DAMAGED
-  LOST
-  FOR_DISPOSAL
-  DISPOSED
-  RESERVED
+GOOD_CONDITION
+BORROWED
+UNDER_REPAIR
+DAMAGED
+LOST
+FOR_DISPOSAL
+DISPOSED
+RESERVED
 }
-
 enum ItemType {
-  CONSUMABLE
-  ASSET
-  TOOL
+CONSUMABLE
+ASSET
+TOOL
 }
-
 enum Campus {
-  MC1
-  MC2
-  PAMPLONA
+MC1
+MC2
+PAMPLONA
 }
-
 enum ProjectType {
-  CONSTRUCTION
-  RENOVATION
-  FABRICATION
+CONSTRUCTION
+RENOVATION
+FABRICATION
 }
-
-model Project {
-  id                String        @id @default(uuid())
-  name              String
-  description       String?
-  startDate         DateTime?
-  endDate           DateTime?
-  status            ProjectStatus @default(ONGOING)
-  createdAt         DateTime      @default(now())
-
-  // Control No. from the Detailed Estimate of Materials document, if imported
-  estimateControlNo String?       @unique
-  type   ProjectType
-  campus Campus
-
-  items             InventoryItem[]
-  materialEstimates MaterialEstimate[]
-  purchaseRequests  PurchaseRequest[]
-}
-
 enum ProjectStatus {
-  ONGOING
-  COMPLETED
-  ON_HOLD
-  CANCELLED
+ONGOING
+COMPLETED
+ON_HOLD
+CANCELLED
 }
-
+model Project {
+id                String        @id @default(uuid())
+name              String
+description       String?
+startDate         DateTime?
+endDate           DateTime?
+status            ProjectStatus @default(ONGOING)
+isActive          Boolean       @default(true)
+createdAt         DateTime      @default(now())
+updatedAt         DateTime      @updatedAt
+estimateControlNo String?       @unique
+type              ProjectType
+campus            Campus
+items             InventoryItem[]      @relation("ProjectInventory")
+materialEstimates MaterialEstimate[]   @relation("ProjectEstimates")
+purchaseRequests  PurchaseRequest[]    @relation("ProjectPurchaseRequests")
+budgetAllocations BudgetAllocation[]   @relation("ProjectBudgetAllocations")
+@@index([campus])
+@@index([isActive])
+}
 model InventoryItem {
-  id             String   @id @default(uuid())
-  name           String
-  type           ItemType
-  description    String?
-  quantity       Decimal  @default(1)
-  unit           String?  // "PCS", "LENGTH", "KG", "CU. MTR.", etc.
-  location       String?
-  isActive Boolean @default(true)
-  propertyNumber String?  @unique
-  serialNumber   String?  @unique
+id             String   @id @default(uuid())
+name           String
+type           ItemType
+description    String?
+quantity       Decimal  @default(1) @db.Decimal(15, 4)
+unit           String?
+location       String?
+isActive       Boolean  @default(true)
+propertyNumber String?  @unique
+serialNumber   String?  @unique
+unitCost        Decimal?  @db.Decimal(19, 4)
+acquisitionDate DateTime?
+campus Campus
+status ItemStatus @default(GOOD_CONDITION)
+createdAt DateTime @default(now())
+updatedAt DateTime @updatedAt
+projectId String?
+project   Project? @relation("ProjectInventory", fields: [projectId], references: [id], onDelete: SetNull)
+categoryId String?
+category   ItemCategory? @relation("CategoryInventoryItems", fields: [categoryId], references: [id], onDelete: SetNull)
+workRequestItems     WorkRequestItem[]     @relation("InventoryWorkRequestItems")
+transactions         ItemTransaction[]     @relation("InventoryTransactions")
+maintenanceSchedules MaintenanceSchedule[] @relation("ItemMaintenanceSchedules")
+stockMovements       StockMovement[]       @relation("ItemStockMovements")
+transfers            AssetTransfer[]       @relation("ItemTransfers")
+borrowRequests BorrowRequest[] @relation("BorrowRequests")
+sourcePurchaseRequestId String?
+sourcePurchaseRequest   PurchaseRequest? @relation("SourcedInventoryItems", fields: [sourcePurchaseRequestId], references: [id], onDelete: SetNull)
+@@index([categoryId])
+@@index([projectId])
+@@index([type])
+@@index([status])
+@@index([campus])
+@@index([isActive])
+@@index([sourcePurchaseRequestId])
 
-  unitCost        Decimal?
-  totalValue      Decimal?
-  acquisitionDate DateTime?
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  // null = common/general stock, set = belongs to a specific project
-  projectId String?
-  project   Project? @relation(fields: [projectId], references: [id])
-
-  workRequests         WorkRequest[]
-  issuances            ItemIssuance[]
-  withdrawals          WarehouseWithdrawal[]
-  maintenanceSchedules MaintenanceSchedule[]
-  stockMovements       StockMovement[]
-  categoryId String?
-  category   ItemCategory? @relation(fields: [categoryId], references: [id])
-  campus Campus
-  status ItemStatus @default(GOOD_CONDITION)
-  @@index([categoryId])
-  @@index([projectId])
-  @@index([type])
 }
-
 model ItemCategory {
-  id          String  @id @default(uuid())
-  name        String  @unique
-  description String?
-  items       InventoryItem[]
+id          String  @id @default(uuid())
+name        String  @unique
+description String?
+isActive    Boolean @default(true)
+items       InventoryItem[] @relation("CategoryInventoryItems")
+createdAt DateTime @default(now())
+updatedAt DateTime @updatedAt
 }
-
 // =========================================================
-// STOCK MOVEMENT (quantity change ledger / "stock card")
+// STOCK MOVEMENT
 // =========================================================
-
+enum StockMovementType {
+RECEIVED
+WITHDRAWN
+ADJUSTED
+RETURNED
+}
 model StockMovement {
-  id             String   @id @default(uuid())
-  movementType   String   // "RECEIVED", "WITHDRAWN", "ADJUSTED"
-  quantityChange Decimal  // positive for increases, negative for decreases
-  quantityAfter  Decimal  // snapshot of quantity right after this movement
-  reason         String?
-
-  // Optional traceability back to the record that caused this movement
-  referenceType String?  // "WarehouseWithdrawal", "Manual"
-  referenceId   String?
-
-  inventoryItemId String
-  inventoryItem   InventoryItem @relation(fields: [inventoryItemId], references: [id])
-
-  performedById String
-  performedBy   User   @relation(fields: [performedById], references: [id])
-
-  createdAt DateTime @default(now())
-
-  @@index([inventoryItemId])
-  @@index([createdAt])
+id             String            @id @default(uuid())
+movementType   StockMovementType
+quantityChange Decimal           @db.Decimal(15, 4)
+quantityAfter  Decimal           @db.Decimal(15, 4)
+reason         String?
+referenceType String?
+referenceId   String?
+inventoryItemId String
+inventoryItem   InventoryItem @relation("ItemStockMovements", fields: [inventoryItemId], references: [id], onDelete: Restrict)
+performedById String
+performedBy   User   @relation("StockMovementPerformer", fields: [performedById], references: [id], onDelete: Restrict)
+purchaseRequestId String?
+purchaseRequest   PurchaseRequest? @relation("PurchaseStockMovements", fields: [purchaseRequestId], references: [id], onDelete: SetNull)
+createdAt DateTime @default(now())
+@@index([inventoryItemId])
+@@index([createdAt])
+@@index([purchaseRequestId])
 }
-
 // =========================================================
-// WORK REQUESTS (a.k.a. Job Orders — same record, richer over time)
+// ITEM TRANSACTION (Issuance / Withdrawal / Return)
 // =========================================================
+enum TransactionType {
+ISSUANCE
+WITHDRAWAL
+RETURN
+}
+model ItemTransaction {
+id              String          @id @default(uuid())
+controlNumber   String          @unique
+transactionType TransactionType
+inventoryItemId String
+inventoryItem   InventoryItem   @relation("InventoryTransactions", fields: [inventoryItemId], references: [id], onDelete: Restrict)
+quantity        Decimal         @db.Decimal(15, 4)
+personId        String?
+person          Person?         @relation("PersonTransactions", fields: [personId], references: [id], onDelete: SetNull)
+custodianId     String
+custodian       User            @relation("TransactionCustodian", fields: [custodianId], references: [id], onDelete: Restrict)
+transactionDate DateTime        @default(now())
+dueDate         DateTime?
+returnedAt      DateTime?
+notes           String?
+createdAt       DateTime        @default(now())
+updatedAt       DateTime        @updatedAt
+borrowRequest   BorrowRequest?  @relation("BorrowTransaction")
 
+@@index([inventoryItemId])
+@@index([personId])
+@@index([custodianId])
+@@index([transactionType])
+@@index([transactionDate])
+@@index([inventoryItemId, transactionType])
+}
+// =========================================================
+// ASSET TRANSFER HISTORY
+// =========================================================
+enum TransferStatus {
+PENDING
+APPROVED
+REJECTED
+COMPLETED
+}
+model AssetTransfer {
+id           String         @id @default(uuid())
+fromCampus   Campus
+toCampus     Campus
+transferDate DateTime       @default(now())
+reason       String?
+status       TransferStatus @default(PENDING)
+transferredById String
+transferredBy   User   @relation("TransferredBy", fields: [transferredById], references: [id], onDelete: Restrict)
+approvedById String?
+approvedBy   User?  @relation("ApprovedTransfer", fields: [approvedById], references: [id], onDelete: SetNull)
+receivedById String?
+receivedBy   User?  @relation("ReceivedTransfer", fields: [receivedById], references: [id], onDelete: SetNull)
+inventoryItemId String
+inventoryItem   InventoryItem @relation("ItemTransfers", fields: [inventoryItemId], references: [id], onDelete: Cascade)
+createdAt DateTime @default(now())
+updatedAt DateTime @updatedAt
+@@index([inventoryItemId])
+@@index([fromCampus])
+@@index([toCampus])
+@@index([transferDate])
+@@index([status])
+@@index([inventoryItemId, status])
+}
+// =========================================================
+// WORK REQUESTS
+// =========================================================
 enum RequestType {
-  REGULAR_MAINTENANCE
-  REPAIR
-  FABRICATION
-  INSTALLATION
-  REPLACEMENT
-  PLAN_DESIGN
-  BAYANIHAN
-  OTHERS
+REGULAR_MAINTENANCE
+REPAIR
+FABRICATION
+INSTALLATION
+REPLACEMENT
+PLAN_DESIGN
+BAYANIHAN
+OTHERS
 }
-
 enum RequestStatus {
-  PENDING
-  ASSIGNED
-  IN_PROGRESS
-  COMPLETED
-  CANCELLED
+PENDING
+ASSIGNED
+IN_PROGRESS
+COMPLETED
+CANCELLED
 }
-
+enum AssignmentRole {
+LEAD
+MEMBER
+}
 model WorkRequest {
-  id               String        @id @default(uuid())
-  referenceNo      String        @unique // Control Number / Work Number — e.g. "WR-2026-0001"
-  requestType      RequestType
-  requestingOffice String
-  particulars      String?
-
-  // type-specific fields, shape depends on requestType
-  details Json?
-
-  status          RequestStatus @default(PENDING)
-  deadline        DateTime?
-  progressPercent Int           @default(0)
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  requestedById String
-  requestedBy   User   @relation("RequestedWorkRequests", fields: [requestedById], references: [id])
-
-  // Primary/lead assignee (quick reference)
-  assignedToId String?
-  assignedTo   User?   @relation("AssignedWorkRequests", fields: [assignedToId], references: [id])
-
-  // Full crew with individual roles (Technician, Plumber, Electrician, etc.)
-  assignments WorkRequestAssignment[]
-
-  inventoryItemId String?
-  inventoryItem   InventoryItem? @relation(fields: [inventoryItemId], references: [id])
-  campus Campus
-  accomplishment WorkRequestAccomplishment?
-  notifications  Notification[]
-
-  @@index([requestedById])
-  @@index([assignedToId])
-  @@index([status])
-  @@index([inventoryItemId])
+id               String        @id @default(uuid())
+referenceNo      String        @unique
+requestType      RequestType
+particulars      String?
+isActive         Boolean       @default(true)
+details Json?
+status          RequestStatus @default(PENDING)
+deadline        DateTime?
+progressPercent Int           @default(0)
+campus Campus
+createdAt DateTime @default(now())
+updatedAt DateTime @updatedAt
+requestedById String
+requestedBy   User   @relation("RequestedWorkRequests", fields: [requestedById], references: [id], onDelete: Restrict)
+items WorkRequestItem[] @relation("WorkRequestItems")
+assignments WorkRequestAssignment[] @relation("WorkRequestAssignments")
+accomplishment WorkRequestAccomplishment? @relation("WorkRequestAccomplishment")
+notifications  Notification[]             @relation("WorkRequestNotifications")
+requestingOfficeId String?
+requestingOffice   Office? @relation("OfficeWorkRequests", fields: [requestingOfficeId], references: [id], onDelete: SetNull)
+maintenanceScheduleId String?
+maintenanceSchedule   MaintenanceSchedule? @relation("MaintenanceWorkRequests", fields: [maintenanceScheduleId], references: [id], onDelete: SetNull)
+@@index([requestedById])
+@@index([status])
+@@index([campus])
+@@index([requestType])
+@@index([deadline])
+@@index([requestingOfficeId])
+@@index([maintenanceScheduleId])
 }
-
+model WorkRequestItem {
+id            String  @id @default(uuid())
+quantity      Decimal @db.Decimal(15, 4)
+description   String?
+workRequestId String
+workRequest   WorkRequest   @relation("WorkRequestItems", fields: [workRequestId], references: [id], onDelete: Cascade)
+inventoryItemId String
+inventoryItem   InventoryItem @relation("InventoryWorkRequestItems", fields: [inventoryItemId], references: [id], onDelete: Restrict)
+createdAt DateTime @default(now())
+updatedAt DateTime @updatedAt
+@@index([workRequestId])
+@@index([inventoryItemId])
+}
 model WorkRequestAssignment {
-  id         String   @id @default(uuid())
-  role       String   // "Technician", "Plumber", "Electrician", "Lead", etc.
-  assignedAt DateTime @default(now())
-
-  workRequestId String
-  workRequest   WorkRequest @relation(fields: [workRequestId], references: [id])
-
-  userId String
-  user   User   @relation(fields: [userId], references: [id])
-
-  @@unique([workRequestId, userId, role])
-  @@index([workRequestId])
-  @@index([userId])
+id           String         @id @default(uuid())
+role         AssignmentRole
+assignedAt   DateTime       @default(now())
+unassignedAt DateTime?
+workRequestId String
+workRequest   WorkRequest @relation("WorkRequestAssignments", fields: [workRequestId], references: [id], onDelete: Cascade)
+userId String
+user   User   @relation("WorkRequestAssignmentUser", fields: [userId], references: [id], onDelete: Restrict)
+@@index([workRequestId])
+@@index([userId])
+// PostgreSQL partial unique index to enforce exactly one active LEAD per work request:
+// CREATE UNIQUE INDEX "one_active_lead_per_work_request"
+// ON "WorkRequestAssignment"("workRequestId")
+// WHERE "role" = 'LEAD' AND "unassignedAt" IS NULL;
 }
-
 model WorkRequestAccomplishment {
-  id                String    @id @default(uuid())
-  dateTimeStarted   DateTime?
-  dateTimeCompleted DateTime?
-
-  // type-specific completion details as JSON
-  completionDetails Json?
-
-  serviceRating     Int?    // 1-5
-  expectationRating Int?    // 1-5
-  comments          String?
-
-  workRequestId String      @unique
-  workRequest   WorkRequest @relation(fields: [workRequestId], references: [id])
-
-  bgPersonnelId String
-  bgPersonnel   User   @relation(fields: [bgPersonnelId], references: [id])
-
-  createdAt DateTime @default(now())
+id                String    @id @default(uuid())
+dateTimeStarted   DateTime?
+dateTimeCompleted DateTime?
+completionDetails Json?
+serviceRating     Int?
+expectationRating Int?
+comments          String?
+workRequestId String      @unique
+workRequest   WorkRequest @relation("WorkRequestAccomplishment", fields: [workRequestId], references: [id], onDelete: Cascade)
+bgPersonnelId String
+bgPersonnel   User   @relation("AccomplishmentPersonnel", fields: [bgPersonnelId], references: [id], onDelete: Restrict)
+createdAt DateTime @default(now())
+updatedAt DateTime @updatedAt
 }
-
-// =========================================================
-// ITEM ISSUANCE / RETURN TRACKING
-// =========================================================
-
-model ItemIssuance {
-  id            String @id @default(uuid())
-  controlNumber String @unique
-
-  inventoryItemId String
-  inventoryItem   InventoryItem @relation(fields: [inventoryItemId], references: [id])
-  quantity        Int           @default(1)
-
-  borrowerName  String
-  studentId     String? // if borrower is a student
-  contactNumber String? // if borrower is external/staff without a student ID
-
-  custodianId String
-  custodian   User   @relation("IssuanceCustodian", fields: [custodianId], references: [id])
-
-  issuedAt   DateTime  @default(now())
-  dueBackAt  DateTime?
-  returnedAt DateTime?
-
-  @@index([inventoryItemId])
-  @@index([custodianId])
-}
-
-// =========================================================
-// WAREHOUSE (BODEGA) WITHDRAWALS
-// =========================================================
-
-model WarehouseWithdrawal {
-  id             String @id @default(uuid())
-  issuanceSlipNo String @unique
-
-  inventoryItemId String
-  inventoryItem   InventoryItem @relation(fields: [inventoryItemId], references: [id])
-  quantity        Int
-
-  withdrawnByName String // person/office who took the consumables
-
-  custodianId String
-  custodian   User   @relation("WithdrawalCustodian", fields: [custodianId], references: [id])
-
-  withdrawnAt DateTime @default(now())
-
-  @@index([inventoryItemId])
-  @@index([custodianId])
-}
-
-// =========================================================
-// PROCUREMENT: DETAILED ESTIMATES -> PURCHASE REQUESTS
-// =========================================================
-
-model MaterialEstimate {
-  id          String   @id @default(uuid())
-  category    String?  // section header, e.g. "MASONRY WORKS"
-  itemNo      String?  // e.g. "1.1"
-  description String
-  quantity    Decimal
-  unit        String
-  unitCost    Decimal
-  amount      Decimal
-  createdAt   DateTime @default(now())
-
-  projectId String
-  project   Project @relation(fields: [projectId], references: [id])
-
-  purchaseRequestItems PurchaseRequestItem[]
-
-  @@index([projectId])
-}
-
-enum PurchaseRequestStatus {
-  DRAFT
-  PENDING
-  APPROVED
-  REJECTED
-  COMPLETED
-}
-
-model PurchaseRequest {
-  id               String                @id @default(uuid())
-  controlNo        String                @unique // e.g. "PR-2026-0001"
-  requestingOffice String
-  purpose          String?
-  status           PurchaseRequestStatus @default(PENDING)
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  projectId String
-  project   Project @relation(fields: [projectId], references: [id])
-
-  requestedById String
-  requestedBy   User   @relation("RequestedPurchaseRequests", fields: [requestedById], references: [id])
-
-  approvedById String?
-  approvedBy   User?     @relation("ApprovedPurchaseRequests", fields: [approvedById], references: [id])
-  approvedAt   DateTime?
-
-  items PurchaseRequestItem[]
-
-  @@index([projectId])
-  @@index([requestedById])
-  @@index([status])
-}
-
-model PurchaseRequestItem {
-  id          String  @id @default(uuid())
-  description String
-  quantity    Decimal
-  unit        String
-  unitCost    Decimal
-  totalCost   Decimal
-
-  purchaseRequestId String
-  purchaseRequest   PurchaseRequest @relation(fields: [purchaseRequestId], references: [id])
-
-  // traceability back to the original estimate line, if converted from one
-  materialEstimateId String?
-  materialEstimate   MaterialEstimate? @relation(fields: [materialEstimateId], references: [id])
-
-  @@index([purchaseRequestId])
-}
-
 // =========================================================
 // PREVENTIVE MAINTENANCE SCHEDULE
 // =========================================================
-
 model MaintenanceSchedule {
-  id              String    @id @default(uuid())
-  title           String    // "Quarterly Aircon Cleaning"
-  frequencyDays   Int       // e.g. 90 for every 3 months
-  lastPerformedAt DateTime?
-  nextDueAt       DateTime
-  isActive        Boolean   @default(true)
-  createdAt       DateTime  @default(now())
-
-  inventoryItemId String
-  inventoryItem   InventoryItem @relation(fields: [inventoryItemId], references: [id])
-
-  createdById String
-  createdBy   User   @relation(fields: [createdById], references: [id])
-
-  @@index([inventoryItemId])
-  @@index([nextDueAt])
-  @@index([isActive])
+id              String    @id @default(uuid())
+title           String
+frequencyDays   Int
+lastPerformedAt DateTime?
+nextDueAt       DateTime
+isActive        Boolean   @default(true)
+createdAt       DateTime  @default(now())
+inventoryItemId String
+inventoryItem   InventoryItem @relation("ItemMaintenanceSchedules", fields: [inventoryItemId], references: [id], onDelete: Cascade)
+createdById String
+createdBy   User   @relation("MaintenanceCreator", fields: [createdById], references: [id], onDelete: Restrict)
+workRequests WorkRequest[] @relation("MaintenanceWorkRequests")
+@@index([inventoryItemId])
+@@index([nextDueAt])
+@@index([isActive])
+@@index([isActive, nextDueAt])
 }
-
+// =========================================================
+// PROCUREMENT
+// =========================================================
+model MaterialEstimate {
+id          String   @id @default(uuid())
+category    String?
+itemNo      String?
+description String
+quantity    Decimal  @db.Decimal(15, 4)
+unit        String
+unitCost    Decimal  @db.Decimal(19, 4)
+createdAt   DateTime @default(now())
+updatedAt   DateTime @updatedAt
+projectId String
+project   Project @relation("ProjectEstimates", fields: [projectId], references: [id], onDelete: Cascade)
+purchaseRequestItems PurchaseRequestItem[] @relation("EstimatePRItems")
+@@index([projectId])
+}
+enum PurchaseRequestStatus {
+DRAFT
+PENDING
+APPROVED
+REJECTED
+COMPLETED
+}
+model PurchaseRequest {
+id               String                @id @default(uuid())
+controlNo        String                @unique
+purpose          String?
+status           PurchaseRequestStatus @default(PENDING)
+isActive         Boolean               @default(true)
+createdAt DateTime @default(now())
+updatedAt DateTime @updatedAt
+projectId String?
+project   Project? @relation("ProjectPurchaseRequests", fields: [projectId], references: [id], onDelete: SetNull)
+requestedById String
+requestedBy   User   @relation("RequestedPurchaseRequests", fields: [requestedById], references: [id], onDelete: Restrict)
+approvedById String?
+approvedBy   User?     @relation("ApprovedPurchaseRequests", fields: [approvedById], references: [id], onDelete: SetNull)
+approvedAt   DateTime?
+items PurchaseRequestItem[] @relation("PRItems")
+budgetAllocationId String?
+budgetAllocation   BudgetAllocation? @relation("PurchaseRequestBudget", fields: [budgetAllocationId], references: [id], onDelete: SetNull)
+requestingOfficeId String?
+requestingOffice   Office? @relation("OfficePurchaseRequests", fields: [requestingOfficeId], references: [id], onDelete: SetNull)
+stockMovements StockMovement[] @relation("PurchaseStockMovements")
+sourcedInventoryItems InventoryItem[] @relation("SourcedInventoryItems")
+@@index([projectId])
+@@index([requestedById])
+@@index([status])
+@@index([budgetAllocationId])
+@@index([requestingOfficeId])
+}
+model PurchaseRequestItem {
+id          String   @id @default(uuid())
+description String
+quantity    Decimal  @db.Decimal(15, 4)
+unit        String
+unitCost    Decimal  @db.Decimal(19, 4)
+createdAt   DateTime @default(now())
+updatedAt   DateTime @updatedAt
+purchaseRequestId String
+purchaseRequest   PurchaseRequest @relation("PRItems", fields: [purchaseRequestId], references: [id], onDelete: Cascade)
+materialEstimateId String?
+materialEstimate   MaterialEstimate? @relation("EstimatePRItems", fields: [materialEstimateId], references: [id], onDelete: SetNull)
+@@index([purchaseRequestId])
+}
 // =========================================================
 // AUDIT LOG
 // =========================================================
-
 model AuditLog {
-  id         String   @id @default(uuid())
-  action     String   // "CREATE", "UPDATE", "DELETE", "APPROVE", "REJECT", etc.
-  entityType String   // "InventoryItem", "PurchaseRequest", "User", "WorkRequest", etc.
-  entityId   String
-
-  description String?
-  metadata    Json?
-
-  performedById String
-  performedBy   User   @relation(fields: [performedById], references: [id])
-
-  createdAt DateTime @default(now())
-
-  @@index([entityType, entityId])
-  @@index([performedById])
-  @@index([createdAt])
+id         String   @id @default(uuid())
+action     String
+entityType String
+entityId   String
+description String?
+metadata    Json?
+performedById String
+performedBy   User   @relation("AuditPerformer", fields: [performedById], references: [id], onDelete: Restrict)
+createdAt DateTime @default(now())
+@@index([entityType, entityId])
+@@index([performedById])
+@@index([createdAt])
 }
-
 // =========================================================
 // SHARED SEQUENTIAL NUMBER GENERATOR
-// (Work Requests, Issuances, Withdrawals, Purchase Requests all use this)
 // =========================================================
-
 model SequenceCounter {
-  type  String // "WR", "ISS", "WH", "PR"
-  year  Int
-  count Int    @default(0)
-
-  @@id([type, year])
+type      String
+year      Int
+count     Int      @default(0)
+createdAt DateTime @default(now())
+updatedAt DateTime @updatedAt
+@@id([type, year])
 }
 
-model Position {
-  id          String  @id @default(uuid())
-  name        String  @unique   // "Technician", "Electrician", "Plumber", "Cleaning Utility", etc.
-  description String?
-  users       User[]
+// =========================================================
+// BORROW REQUEST
+// =========================================================
+enum BorrowRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  RETURNED
+}
+
+model BorrowRequest {
+  id               String                @id @default(uuid())
+  inventoryItemId  String
+  inventoryItem    InventoryItem         @relation("BorrowRequests", fields: [inventoryItemId], references: [id], onDelete: Restrict)
+  requestedById    String
+  requestedBy      User                  @relation("BorrowRequester", fields: [requestedById], references: [id], onDelete: Restrict)
+  status           BorrowRequestStatus   @default(PENDING)
+  quantity         Decimal               @db.Decimal(15, 4)
+  reason           String?
+  approvedById     String?
+  approvedBy       User?                 @relation("BorrowApprover", fields: [approvedById], references: [id], onDelete: SetNull)
+  approvedAt       DateTime?
+  rejectedAt       DateTime?
+  returnedAt       DateTime?
+  transactionId    String?               @unique
+  transaction      ItemTransaction?      @relation("BorrowTransaction", fields: [transactionId], references: [id], onDelete: SetNull)
+  createdAt        DateTime              @default(now())
+  updatedAt        DateTime              @updatedAt
+  decisionNotes    String?
+  dueDate          DateTime?  
+  
+  @@index([status])
+  @@index([inventoryItemId])
 }

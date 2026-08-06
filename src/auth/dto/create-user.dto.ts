@@ -17,4 +17,8 @@ export class CreateUserDto {
   @IsOptional()
   @IsString()
   positionId?: string;
+
+  @IsOptional()
+  @IsString()
+  officeId?: string;
 }

@@ -21,6 +21,7 @@ import { Roles } from './decorators/roles.decorator';
 import { RolesGuard } from './guards/roles.guard';
 import { CreateUserDto } from './dto/create-user.dto';
 import { ChangeRoleDto } from './dto/change-role.dto';
+import { ChangeOfficeDto } from './dto/change-office.dto';
 
 @Controller('auth')
 export class AuthController {
@@ -58,7 +59,7 @@ export class AuthController {
   @UseGuards(JwtAuthGuard)
   @Post('me')
   getProfile(@Req() req) {
-    return req.user;
+    return this.authService.getProfile(req.user.userId);
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
@@ -80,6 +81,13 @@ export class AuthController {
   @Patch('users/:id/role')
   changeRole(@Param('id') id: string, @Body() dto: ChangeRoleDto, @Req() req) {
     return this.authService.changeRole(id, dto.roleId, req.user.userId);
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('Administrator')
+  @Patch('users/:id/office')
+  changeOffice(@Param('id') id: string, @Body() dto: ChangeOfficeDto, @Req() req) {
+    return this.authService.changeOffice(id, dto.officeId, req.user.userId);
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
