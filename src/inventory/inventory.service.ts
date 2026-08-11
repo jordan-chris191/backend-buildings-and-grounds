@@ -14,17 +14,19 @@ import {
 
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditLogService } from '../audit-log/audit-log.service';
-import { InventoryGateway } from '../gateway/inventory.gateway'; // ← ADD THIS
+import { InventoryGateway } from '../gateway/inventory.gateway';
 
 import { CreateInventoryItemDto } from './dto/create-inventory-item.dto';
 import { UpdateInventoryItemDto } from './dto/update-inventory-item.dto';
+
+const DEFAULT_LOW_STOCK_THRESHOLD = 5; // adjust as needed
 
 @Injectable()
 export class InventoryService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly auditLogService: AuditLogService,
-    private readonly inventoryGateway: InventoryGateway, // ← ADD THIS
+    private readonly inventoryGateway: InventoryGateway,
   ) {}
 
   private readonly defaultInclude = {
@@ -38,6 +40,12 @@ export class InventoryService {
 
   private toResponseItem(item: any) {
     const quantity = Number(item.quantity);
+    const threshold =
+      item.minStockLevel != null
+        ? Number(item.minStockLevel)
+        : DEFAULT_LOW_STOCK_THRESHOLD;
+
+    const isLowStock = quantity <= threshold;
     const unitCost = item.unitCost != null ? Number(item.unitCost) : null;
     const totalValue = unitCost != null
       ? Math.round(quantity * unitCost * 100) / 100
@@ -46,6 +54,7 @@ export class InventoryService {
     return {
       ...item,
       totalValue,
+      isLowStock,
     };
   }
 
@@ -103,7 +112,6 @@ export class InventoryService {
 
     const responseItem = this.toResponseItem(rawItem);
 
-    // ✅ Notify about new item
     this.inventoryGateway.notifyInventoryUpdate(
       responseItem.id,
       responseItem.name,
@@ -114,26 +122,38 @@ export class InventoryService {
     return responseItem;
   }
 
-  // ---------- FIND ALL ----------
+  // ---------- FIND ALL (with optional lowStock filter) ----------
   async findAll(
     type?: ItemType,
     projectId?: string,
     categoryId?: string,
     campus?: Campus,
     status?: ItemStatus,
+    lowStock?: boolean,                     // ← new optional filter
   ) {
+    const where: Prisma.InventoryItemWhereInput = {
+      isActive: true,
+      ...(type && { type }),
+      ...(projectId && { projectId }),
+      ...(categoryId && { categoryId }),
+      ...(campus && { campus }),
+      ...(status && { status }),
+    };
+
+    if (lowStock !== undefined) {
+      // Global threshold used here; if you later add per-item thresholds,
+      // you can filter in-memory or use a raw query.
+      where.quantity = {
+        lte: new Prisma.Decimal(DEFAULT_LOW_STOCK_THRESHOLD),
+      };
+    }
+
     const items = await this.prisma.inventoryItem.findMany({
-      where: {
-        isActive: true,
-        ...(type && { type }),
-        ...(projectId && { projectId }),
-        ...(categoryId && { categoryId }),
-        ...(campus && { campus }),
-        ...(status && { status }),
-      },
+      where,
       include: this.defaultInclude,
       orderBy: { createdAt: 'desc' },
     });
+
     return items.map((item) => this.toResponseItem(item));
   }
 
@@ -165,51 +185,50 @@ export class InventoryService {
 
   // ---------- UPDATE ----------
   async update(id: string, performedById: string, dto: UpdateInventoryItemDto) {
-  const existing = await this.findOne(id);
+    const existing = await this.findOne(id);
 
-  if (
-    existing.type === ItemType.CONSUMABLE &&
-    dto.unit !== undefined &&
-    dto.unit.trim() === ''
-  ) {
-    throw new BadRequestException('Consumable items require a unit.');
+    if (
+      existing.type === ItemType.CONSUMABLE &&
+      dto.unit !== undefined &&
+      dto.unit.trim() === ''
+    ) {
+      throw new BadRequestException('Consumable items require a unit.');
+    }
+
+    const updated = await this.prisma.inventoryItem.update({
+      where: { id },
+      data: {
+        ...dto,
+        acquisitionDate: dto.acquisitionDate
+          ? new Date(dto.acquisitionDate)
+          : undefined,
+        unitCost: dto.unitCost !== undefined ? this.toDecimal(dto.unitCost) : undefined,
+        quantity: dto.quantity !== undefined ? this.toDecimal(dto.quantity) : undefined,
+      },
+      include: this.defaultInclude,
+    });
+
+    await this.auditLogService.log({
+      action: 'UPDATE',
+      entityType: 'InventoryItem',
+      entityId: id,
+      description: `Updated inventory item "${updated.name}"`,
+      performedById,
+    });
+
+    const responseItem = this.toResponseItem(updated);
+
+    if (dto.quantity !== undefined) {
+      this.inventoryGateway.notifyInventoryUpdate(
+        responseItem.id,
+        responseItem.name,
+        Number(responseItem.quantity),
+        responseItem.status,
+      );
+    }
+
+    return responseItem;
   }
-
-  const updated = await this.prisma.inventoryItem.update({
-    where: { id },
-    data: {
-      ...dto,
-      acquisitionDate: dto.acquisitionDate
-        ? new Date(dto.acquisitionDate)
-        : undefined,
-      unitCost: dto.unitCost !== undefined ? this.toDecimal(dto.unitCost) : undefined,
-      quantity: dto.quantity !== undefined ? this.toDecimal(dto.quantity) : undefined,
-    },
-    include: this.defaultInclude,
-  });
-
-  await this.auditLogService.log({
-    action: 'UPDATE',
-    entityType: 'InventoryItem',
-    entityId: id,
-    description: `Updated inventory item "${updated.name}"`,
-    performedById,
-  });
-
-  const responseItem = this.toResponseItem(updated);
-
-  // ✅ Only notify when quantity changes (status changes handled separately)
-  if (dto.quantity !== undefined) {
-    this.inventoryGateway.notifyInventoryUpdate(
-      responseItem.id,
-      responseItem.name,
-      Number(responseItem.quantity),
-      responseItem.status,
-    );
-  }
-
-  return responseItem;
-}
 
   // ---------- ADJUST QUANTITY ----------
   async adjustQuantity(id: string, userId: string, newQuantity: number, reason: string) {
@@ -245,7 +264,6 @@ export class InventoryService {
 
     const responseItem = this.toResponseItem(updated);
 
-    // ✅ Notify about quantity change
     this.inventoryGateway.notifyInventoryUpdate(
       responseItem.id,
       responseItem.name,
@@ -289,7 +307,6 @@ export class InventoryService {
         performedById,
       });
 
-      // ✅ Notify that item is archived (quantity = 0)
       this.inventoryGateway.notifyInventoryUpdate(
         id,
         item.name,
@@ -341,7 +358,6 @@ export class InventoryService {
 
     const responseItem = this.toResponseItem(rawUpdated);
 
-    // ✅ Notify about status change
     this.inventoryGateway.notifyInventoryUpdate(
       responseItem.id,
       responseItem.name,

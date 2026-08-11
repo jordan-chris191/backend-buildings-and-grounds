@@ -22,7 +22,7 @@ import { RolesGuard } from './guards/roles.guard';
 import { CreateUserDto } from './dto/create-user.dto';
 import { ChangeRoleDto } from './dto/change-role.dto';
 import { ChangeOfficeDto } from './dto/change-office.dto';
-
+import { ChangePasswordDto } from './dto/change-password.dto';
 @Controller('auth')
 export class AuthController {
   constructor(private authService: AuthService) {}
@@ -44,7 +44,7 @@ export class AuthController {
     return this.authService.logout(dto.refreshToken);
   }
 
-  @Throttle({ default: { limit: 3, ttl: 3600000 } })
+  @Throttle({ default: { limit: 100, ttl: 3600000 } })
   @Post('request-password-reset')
   requestPasswordReset(@Body() dto: RequestPasswordResetDto) {
     return this.authService.requestPasswordReset(dto.email);
@@ -96,4 +96,17 @@ export class AuthController {
   deactivateUser(@Param('id') id: string, @Req() req) {
     return this.authService.deactivateUser(id, req.user.userId);
   }
+
+  @UseGuards(JwtAuthGuard)
+@Patch('change-password')
+async changePassword(
+  @Req() req,
+  @Body() dto: ChangePasswordDto,   // ← validated automatically
+) {
+  return this.authService.changePassword(
+    req.user.userId,
+    dto.currentPassword,
+    dto.newPassword,
+  );
+}
 }

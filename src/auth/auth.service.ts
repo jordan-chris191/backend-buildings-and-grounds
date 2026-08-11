@@ -524,4 +524,47 @@ export class AuthService {
 
     return updated;
   }
+
+  async changePassword(
+  userId: string,
+  currentPassword: string,
+  newPassword: string,
+) {
+  const user = await this.prisma.user.findUnique({
+    where: { id: userId },
+  });
+
+  if (!user || !user.isActive) {
+    throw new UnauthorizedException('User not found or inactive');
+  }
+
+  const isMatch = await bcrypt.compare(currentPassword, user.passwordHash);
+  if (!isMatch) {
+    throw new UnauthorizedException('Current password is incorrect');
+  }
+
+  const newHash = await bcrypt.hash(newPassword, 10);
+
+  await this.prisma.$transaction([
+    this.prisma.user.update({
+      where: { id: userId },
+      data: { passwordHash: newHash },
+    }),
+    // Revoke all refresh tokens – user must re-login with the new password
+    this.prisma.refreshToken.updateMany({
+      where: { userId, revokedAt: null },
+      data: { revokedAt: new Date() },
+    }),
+  ]);
+
+  await this.auditLogService.log({
+    action: 'CHANGE_PASSWORD',
+    entityType: 'User',
+    entityId: userId,
+    description: `User ${user.email} changed their password`,
+    performedById: userId,
+  });
+
+  return { message: 'Password changed successfully. Please log in again.' };
+}
 }

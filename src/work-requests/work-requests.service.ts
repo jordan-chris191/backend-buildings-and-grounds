@@ -1,3 +1,4 @@
+// src/work-requests/work-requests.service.ts
 import {
   Injectable,
   NotFoundException,
@@ -12,6 +13,7 @@ import {
 
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditLogService } from '../audit-log/audit-log.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import { CreateWorkRequestDto } from './dto/create-work-request.dto';
 import { UpdateWorkRequestDto } from './dto/update-work-request.dto';
 import { AssignWorkRequestDto } from './dto/assign-work-request.dto';
@@ -22,6 +24,7 @@ export class WorkRequestsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly auditLogService: AuditLogService,
+    private readonly notificationsService: NotificationsService,
   ) {}
 
   private readonly defaultInclude = {
@@ -49,6 +52,7 @@ export class WorkRequestsService {
         id: true,
         firstName: true,
         lastName: true,
+        office: { select: { name: true } },
       },
     },
   };
@@ -103,7 +107,6 @@ export class WorkRequestsService {
     return `WR-${year}-${seq}`;
   }
 
-  // ✅ FIXED: campus type changed to Campus enum
   async findAll(status?: RequestStatus, campus?: Campus) {
     return this.prisma.workRequest.findMany({
       where: {
@@ -193,6 +196,22 @@ export class WorkRequestsService {
       performedById: userId,
     });
 
+    // ✅ Notify the assigned user
+    await this.notificationsService.create({
+      title: 'You have been assigned',
+      message: `You have been assigned as ${dto.role} to work request ${wr.referenceNo}.`,
+      userId: dto.userId,
+      workRequestId: id,
+    });
+
+    // ✅ Notify the requester about the assignment
+    await this.notificationsService.create({
+      title: 'Work request assigned',
+      message: `Your work request ${wr.referenceNo} has been assigned to a team.`,
+      userId: wr.requestedById,
+      workRequestId: id,
+    });
+
     return this.findOne(id);
   }
 
@@ -224,6 +243,14 @@ export class WorkRequestsService {
       entityId: id,
       description: `Removed assignment ${assignmentId} (user ${assignment.userId})`,
       performedById: userId,
+    });
+
+    // ✅ Notify the unassigned user
+    await this.notificationsService.create({
+      title: 'You have been unassigned',
+      message: `You have been removed from work request ${wr.referenceNo}.`,
+      userId: assignment.userId,
+      workRequestId: id,
     });
 
     return this.findOne(id);
@@ -259,6 +286,14 @@ export class WorkRequestsService {
       performedById: userId,
     });
 
+    // ✅ Notify the requester
+    await this.notificationsService.create({
+      title: 'Progress updated',
+      message: `Work request ${wr.referenceNo} is now ${progressPercent}% complete.`,
+      userId: wr.requestedById,
+      workRequestId: id,
+    });
+
     return this.findOne(id);
   }
 
@@ -268,7 +303,7 @@ export class WorkRequestsService {
       throw new BadRequestException('Work request cannot be completed in its current status.');
     }
 
-    return this.prisma.$transaction(async (tx) => {
+    const updated = await this.prisma.$transaction(async (tx) => {
       await tx.workRequest.update({
         where: { id },
         data: { status: RequestStatus.COMPLETED, progressPercent: 100 },
@@ -302,6 +337,16 @@ export class WorkRequestsService {
         include: this.defaultInclude,
       });
     });
+
+    // ✅ Notify the requester
+    await this.notificationsService.create({
+      title: 'Work request completed',
+      message: `Your work request ${wr.referenceNo} has been completed.`,
+      userId: wr.requestedById,
+      workRequestId: id,
+    });
+
+    return updated;
   }
 
   async cancel(id: string, userId: string) {
@@ -321,6 +366,14 @@ export class WorkRequestsService {
       entityId: id,
       description: `Work request ${wr.referenceNo} cancelled`,
       performedById: userId,
+    });
+
+    // ✅ Notify the requester
+    await this.notificationsService.create({
+      title: 'Work request cancelled',
+      message: `Your work request ${wr.referenceNo} has been cancelled.`,
+      userId: wr.requestedById,
+      workRequestId: id,
     });
 
     return { message: 'Work request cancelled.' };

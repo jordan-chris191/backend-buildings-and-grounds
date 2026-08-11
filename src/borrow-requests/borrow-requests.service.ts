@@ -17,6 +17,7 @@ import {
   Prisma,
 } from '@prisma/client';
 import { BorrowRequestsGateway } from '../gateway/borrow-requests.gateway';
+import { NotificationsService } from '../notifications/notifications.service';
 
 @Injectable()
 export class BorrowRequestsService {
@@ -24,11 +25,19 @@ export class BorrowRequestsService {
     private readonly prisma: PrismaService,
     private readonly auditLogService: AuditLogService,
     private readonly gateway: BorrowRequestsGateway,
+    private readonly notificationsService: NotificationsService,
   ) {}
 
   private include = {
     inventoryItem: true,
-    requestedBy: { select: { id: true, firstName: true, lastName: true } },
+    requestedBy: {
+      select: {
+        id: true,
+        firstName: true,
+        lastName: true,
+        office: { select: { name: true } },
+      },
+    },
     approvedBy: { select: { id: true, firstName: true, lastName: true } },
     transaction: true,
   };
@@ -285,12 +294,19 @@ export class BorrowRequestsService {
       });
     });
 
-    // ✅ Notify the requester
+    // ✅ Notify the requester via WebSocket
     if (updatedRequest) {
       this.gateway.notifyUser(updatedRequest.requestedById, {
         requestId: id,
         status: updatedRequest.status,
         message: `✅ Your borrow request for "${updatedRequest.inventoryItem.name}" has been approved!`,
+      });
+
+      // 🆕 CREATE DATABASE NOTIFICATION
+      await this.notificationsService.create({
+        title: 'Borrow request approved',
+        message: `Your request for "${updatedRequest.inventoryItem.name}" has been approved.`,
+        userId: updatedRequest.requestedById,
       });
     }
 
@@ -324,12 +340,18 @@ export class BorrowRequestsService {
       performedById: adminId,
     });
 
-    // ✅ Notify the requester
+    // ✅ Notify the requester via WebSocket
     this.gateway.notifyUser(updatedRequest.requestedById, {
       requestId: id,
       status: 'REJECTED',
       message: `❌ Your borrow request for "${updatedRequest.inventoryItem.name}" has been rejected.`,
-      
+    });
+
+    // 🆕 CREATE DATABASE NOTIFICATION
+    await this.notificationsService.create({
+      title: 'Borrow request rejected',
+      message: `Your request for "${updatedRequest.inventoryItem.name}" has been rejected.`,
+      userId: updatedRequest.requestedById,
     });
 
     return updatedRequest;
@@ -409,12 +431,18 @@ export class BorrowRequestsService {
         performedById: userId,
       });
 
-      // ✅ Notify the requester
+      // ✅ Notify the requester via WebSocket
       this.gateway.notifyUser(updatedRequest.requestedById, {
         requestId: id,
         status: 'RETURNED',
         message: `🔄 The item "${updatedRequest.inventoryItem.name}" has been returned.`,
-        
+      });
+
+      // 🆕 CREATE DATABASE NOTIFICATION
+      await this.notificationsService.create({
+        title: 'Borrow request returned',
+        message: `The item "${updatedRequest.inventoryItem.name}" has been returned.`,
+        userId: updatedRequest.requestedById,
       });
 
       return updatedRequest;
@@ -438,12 +466,18 @@ export class BorrowRequestsService {
         performedById: userId,
       });
 
-      // ✅ Notify the requester
+      // ✅ Notify the requester via WebSocket
       this.gateway.notifyUser(updatedRequest.requestedById, {
         requestId: id,
         status: 'RETURNED',
         message: `📄 Your borrow request for "${updatedRequest.inventoryItem.name}" has been closed.`,
-      
+      });
+
+      // 🆕 CREATE DATABASE NOTIFICATION
+      await this.notificationsService.create({
+        title: 'Borrow request closed',
+        message: `Your borrow request for "${updatedRequest.inventoryItem.name}" has been closed.`,
+        userId: updatedRequest.requestedById,
       });
 
       return updatedRequest;
@@ -454,32 +488,32 @@ export class BorrowRequestsService {
 
   // ---------- UPDATE ----------
   async update(id: string, userId: string, dto: UpdateBorrowRequestDto) {
-  const request = await this.findOne(id);
-  if (request.status === BorrowRequestStatus.RETURNED) {
-    throw new BadRequestException('Cannot edit a returned borrow request.');
+    const request = await this.findOne(id);
+    if (request.status === BorrowRequestStatus.RETURNED) {
+      throw new BadRequestException('Cannot edit a returned borrow request.');
+    }
+
+    const data: any = {};
+    if (dto.status) data.status = dto.status;
+    if (dto.transactionType) data.transactionType = dto.transactionType;
+    if (dto.notes) data.decisionNotes = dto.notes;
+    if (dto.dueDate) data.dueDate = new Date(dto.dueDate);
+
+    await this.prisma.borrowRequest.update({
+      where: { id },
+      data,
+    });
+
+    await this.auditLogService.log({
+      action: 'UPDATE_BORROW',
+      entityType: 'BorrowRequest',
+      entityId: id,
+      description: `Borrow request updated`,
+      performedById: userId,
+    });
+
+    return this.findOne(id);
   }
-
-  const data: any = {};
-  if (dto.status) data.status = dto.status;
-  if (dto.transactionType) data.transactionType = dto.transactionType;
-  if (dto.notes) data.decisionNotes = dto.notes;
-  if (dto.dueDate) data.dueDate = new Date(dto.dueDate);
-
-  await this.prisma.borrowRequest.update({
-    where: { id },
-    data,
-  });
-
-  await this.auditLogService.log({
-    action: 'UPDATE_BORROW',
-    entityType: 'BorrowRequest',
-    entityId: id,
-    description: `Borrow request updated`,
-    performedById: userId, // ✅ Use the actual user ID
-  });
-
-  return this.findOne(id);
-}
 
   // ---------- HELPER ----------
   private async generateTransactionControlNo(): Promise<string> {

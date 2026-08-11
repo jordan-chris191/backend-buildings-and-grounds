@@ -52,6 +52,14 @@ export class BorrowRequestsGateway implements OnGatewayConnection, OnGatewayDisc
     }
   }
 
+  // Notify a user about a brand‑new notification record
+notifyNewNotification(userId: string, notification: any) {
+  const socketId = this.connectedClients.get(userId);
+  if (socketId) {
+    this.server.to(socketId).emit('notification', notification);
+  }
+}
+
   // ✅ Broadcast to all connected users (for admin announcements)
   broadcastToAll(event: string, data: any) {
     this.server.emit(event, data);
