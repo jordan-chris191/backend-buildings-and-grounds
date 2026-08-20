@@ -24,6 +24,7 @@ import { RolesModule } from './roles/roles.module';
 import { ReportsModule } from './reports/reports.module';
 import { BorrowRequestsModule } from './borrow-requests/borrow-requests.module';
 import { GatewayModule } from './gateway/gateway.module';
+import { StockMovementsModule } from './stock-movements/stock-movements.module';
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
@@ -52,7 +53,8 @@ import { GatewayModule } from './gateway/gateway.module';
     ReportsModule,
     BudgetModule,
     BorrowRequestsModule,
-    GatewayModule
+    GatewayModule,
+    StockMovementsModule
   ],
   controllers: [AppController],
   providers: [
