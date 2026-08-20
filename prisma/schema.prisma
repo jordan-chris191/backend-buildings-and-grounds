@@ -52,6 +52,8 @@ model User {
   requestedWorkRequests       WorkRequest[]               @relation("RequestedWorkRequests")
   accomplishments             WorkRequestAccomplishment[] @relation("AccomplishmentPersonnel")
   workRequestAssignments      WorkRequestAssignment[]     @relation("WorkRequestAssignmentUser")
+  approvedWorkRequests        WorkRequest[]               @relation("WorkRequestApprovedBy")
+  rejectedWorkRequests        WorkRequest[]               @relation("WorkRequestRejectedBy")
 
   @@index([roleId])
   @@index([positionId])
@@ -331,28 +333,41 @@ model AssetTransfer {
 }
 
 model WorkRequest {
-  id                    String                     @id @default(uuid())
-  referenceNo           String                     @unique
+  id                    String        @id @default(uuid())
+  referenceNo           String        @unique
   requestType           RequestType
   particulars           String?
   details               Json?
-  status                RequestStatus              @default(PENDING)
-  createdAt             DateTime                   @default(now())
-  updatedAt             DateTime                   @updatedAt
+  status                RequestStatus @default(PENDING)
+  createdAt             DateTime      @default(now())
+  updatedAt             DateTime      @updatedAt
   requestedById         String
   deadline              DateTime?
-  progressPercent       Int                        @default(0)
+  progressPercent       Int           @default(0)
   campus                Campus
-  isActive              Boolean                    @default(true)
+  isActive              Boolean       @default(true)
   maintenanceScheduleId String?
   requestingOfficeId    String?
-  notifications         Notification[]             @relation("WorkRequestNotifications")
-  maintenanceSchedule   MaintenanceSchedule?       @relation("MaintenanceWorkRequests", fields: [maintenanceScheduleId], references: [id])
-  requestedBy           User                       @relation("RequestedWorkRequests", fields: [requestedById], references: [id])
-  requestingOffice      Office?                    @relation("OfficeWorkRequests", fields: [requestingOfficeId], references: [id])
-  accomplishment        WorkRequestAccomplishment? @relation("WorkRequestAccomplishment")
-  assignments           WorkRequestAssignment[]    @relation("WorkRequestAssignments")
-  items                 WorkRequestItem[]          @relation("WorkRequestItems")
+
+  priority RequestPriority @default(NOT_URGENT)
+
+  approvalStatus  ApprovalStatus @default(PENDING)
+  approvalNotes   String?
+  rejectionReason String?
+  approvedAt      DateTime?
+  approvedById    String?
+  rejectedAt      DateTime?
+  rejectedById    String?
+
+  notifications       Notification[]             @relation("WorkRequestNotifications")
+  maintenanceSchedule MaintenanceSchedule?       @relation("MaintenanceWorkRequests", fields: [maintenanceScheduleId], references: [id])
+  requestedBy         User                       @relation("RequestedWorkRequests", fields: [requestedById], references: [id])
+  requestingOffice    Office?                    @relation("OfficeWorkRequests", fields: [requestingOfficeId], references: [id])
+  accomplishment      WorkRequestAccomplishment? @relation("WorkRequestAccomplishment")
+  assignments         WorkRequestAssignment[]    @relation("WorkRequestAssignments")
+  items               WorkRequestItem[]          @relation("WorkRequestItems")
+  approvedBy          User?                      @relation("WorkRequestApprovedBy", fields: [approvedById], references: [id])
+  rejectedBy          User?                      @relation("WorkRequestRejectedBy", fields: [rejectedById], references: [id])
 
   @@index([requestedById])
   @@index([status])
@@ -361,6 +376,8 @@ model WorkRequest {
   @@index([deadline])
   @@index([requestingOfficeId])
   @@index([maintenanceScheduleId])
+  @@index([approvalStatus])
+  @@index([priority])
 }
 
 model WorkRequestItem {
@@ -653,4 +670,15 @@ enum BorrowRequestStatus {
   APPROVED
   REJECTED
   RETURNED
+}
+
+enum ApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum RequestPriority {
+  NOT_URGENT
+  URGENT
 }
