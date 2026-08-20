@@ -10,7 +10,9 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { AssetTransfersService } from './asset-transfers.service';
-import { CreateAssetTransferDto } from './dto/create-asset-transfer.dto';
+import { CreateAssetTransferBatchDto } from './dto/create-asset-transfer-batch.dto';
+import { ApproveAssetTransferBatchDto } from './dto/approve-asset-transfer-batch.dto';
+import { RejectAssetTransferBatchDto } from './dto/reject-asset-transfer-batch.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
@@ -20,43 +22,68 @@ import { TransferStatus } from '@prisma/client';
 export class AssetTransfersController {
   constructor(private readonly assetTransfersService: AssetTransfersService) {}
 
+  // -------------------------------------------------------------------
+  // CREATE BATCH
+  // -------------------------------------------------------------------
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('Administrator', 'Building & Grounds Officer')
-  @Post()
-  create(@Req() req, @Body() dto: CreateAssetTransferDto) {
-    return this.assetTransfersService.create(req.user.userId, dto);
+  @Post('batch')
+  createBatch(@Req() req, @Body() dto: CreateAssetTransferBatchDto) {
+    return this.assetTransfersService.createBatch(req.user.userId, dto);
   }
 
+  // -------------------------------------------------------------------
+  // GET ALL BATCHES (GROUPED)
+  // -------------------------------------------------------------------
   @UseGuards(JwtAuthGuard)
-  @Get()
-  findAll(@Query('status') status?: TransferStatus) {
-    return this.assetTransfersService.findAll(status);
+  @Get('batches')
+  findBatches(@Query('status') status?: TransferStatus) {
+    return this.assetTransfersService.findBatches(status);
   }
 
-  @UseGuards(JwtAuthGuard)
-  @Get(':id')
-  findOne(@Param('id') id: string) {
-    return this.assetTransfersService.findOne(id);
-  }
-
+  // -------------------------------------------------------------------
+  // APPROVE BATCH
+  // -------------------------------------------------------------------
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('Administrator', 'Building & Grounds Officer')
-  @Patch(':id/approve')
-  approve(@Param('id') id: string, @Req() req) {
-    return this.assetTransfersService.approve(id, req.user.userId);
+  @Patch('batch/:batchId/approve')
+  approveBatch(
+    @Param('batchId') batchId: string,
+    @Req() req,
+    @Body() dto: ApproveAssetTransferBatchDto,
+  ) {
+    return this.assetTransfersService.approveBatch(
+      batchId,
+      req.user.userId,
+      dto,
+    );
   }
 
+  // -------------------------------------------------------------------
+  // REJECT BATCH
+  // -------------------------------------------------------------------
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('Administrator', 'Building & Grounds Officer')
-  @Patch(':id/reject')
-  reject(@Param('id') id: string, @Req() req) {
-    return this.assetTransfersService.reject(id, req.user.userId);
+  @Patch('batch/:batchId/reject')
+  rejectBatch(
+    @Param('batchId') batchId: string,
+    @Req() req,
+    @Body() dto: RejectAssetTransferBatchDto,
+  ) {
+    return this.assetTransfersService.rejectBatch(
+      batchId,
+      req.user.userId,
+      dto,
+    );
   }
 
+  // -------------------------------------------------------------------
+  // RECEIVE BATCH
+  // -------------------------------------------------------------------
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('Administrator', 'Building & Grounds Officer', 'Property Custodian')
-  @Patch(':id/receive')
-  receive(@Param('id') id: string, @Req() req) {
-    return this.assetTransfersService.receive(id, req.user.userId);
+  @Patch('batch/:batchId/receive')
+  receiveBatch(@Param('batchId') batchId: string, @Req() req) {
+    return this.assetTransfersService.receiveBatch(batchId, req.user.userId);
   }
 }
