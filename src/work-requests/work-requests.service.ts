@@ -3,12 +3,14 @@ import {
   Injectable,
   NotFoundException,
   BadRequestException,
+  ForbiddenException,
 } from '@nestjs/common';
 import {
   RequestStatus,
   AssignmentRole,
   Campus,
   Prisma,
+  ApprovalStatus,
 } from '@prisma/client';
 
 import { PrismaService } from '../prisma/prisma.service';
@@ -18,6 +20,10 @@ import { CreateWorkRequestDto } from './dto/create-work-request.dto';
 import { UpdateWorkRequestDto } from './dto/update-work-request.dto';
 import { AssignWorkRequestDto } from './dto/assign-work-request.dto';
 import { CompleteWorkRequestDto } from './dto/complete-work-request.dto';
+import { ApproveWorkRequestDto } from './dto/approve-work-request.dto';
+import { RejectWorkRequestDto } from './dto/reject-work-request.dto';
+
+const PRIVILEGED_ROLES = ['Administrator', 'Building & Grounds Officer'];
 
 @Injectable()
 export class WorkRequestsService {
@@ -55,6 +61,12 @@ export class WorkRequestsService {
         office: { select: { name: true } },
       },
     },
+    approvedBy: {
+      select: { id: true, firstName: true, lastName: true },
+    },
+    rejectedBy: {
+      select: { id: true, firstName: true, lastName: true },
+    },
   };
 
   async create(userId: string, dto: CreateWorkRequestDto) {
@@ -70,7 +82,8 @@ export class WorkRequestsService {
           status: RequestStatus.PENDING,
           deadline: dto.deadline ? new Date(dto.deadline) : undefined,
           campus: dto.campus,
-          requestedById: userId,
+          priority: dto.priority ?? undefined,
+          requestedById: dto.requestedById ?? userId,
           requestingOfficeId: dto.requestingOfficeId,
           maintenanceScheduleId: dto.maintenanceScheduleId,
           items: {
@@ -107,12 +120,25 @@ export class WorkRequestsService {
     return `WR-${year}-${seq}`;
   }
 
-  async findAll(status?: RequestStatus, campus?: Campus) {
+  async findAll(
+    status?: RequestStatus,
+    campus?: Campus,
+    assignedToUserId?: string,
+    includeInactive = false,
+  ) {
     return this.prisma.workRequest.findMany({
       where: {
-        isActive: true,
+        ...(includeInactive ? {} : { isActive: true }),
         ...(status && { status }),
         ...(campus && { campus }),
+        ...(assignedToUserId && {
+          assignments: {
+            some: {
+              userId: assignedToUserId,
+              unassignedAt: null,
+            },
+          },
+        }),
       },
       include: this.defaultInclude,
       orderBy: { createdAt: 'desc' },
@@ -130,9 +156,10 @@ export class WorkRequestsService {
 
   async update(id: string, userId: string, dto: UpdateWorkRequestDto) {
     const existing = await this.findOne(id);
-    if (existing.status !== RequestStatus.PENDING) {
-      throw new BadRequestException('Only pending work requests can be updated.');
-    }
+    const allowedStatuses: RequestStatus[] = [RequestStatus.PENDING, RequestStatus.ASSIGNED];
+if (!allowedStatuses.includes(existing.status)) {
+  throw new BadRequestException('This can only be edited while pending or assigned.');
+}
 
     const updated = await this.prisma.workRequest.update({
       where: { id },
@@ -153,10 +180,118 @@ export class WorkRequestsService {
     return updated;
   }
 
+  async approve(id: string, userId: string, dto: ApproveWorkRequestDto) {
+    const wr = await this.findOne(id);
+    if (wr.status !== RequestStatus.PENDING) {
+      throw new BadRequestException('Only pending work requests can be approved.');
+    }
+    if (wr.approvalStatus !== ApprovalStatus.PENDING) {
+      throw new BadRequestException('This work request has already been reviewed.');
+    }
+
+    await this.prisma.workRequest.update({
+      where: { id },
+      data: {
+        approvalStatus: ApprovalStatus.APPROVED,
+        approvalNotes: dto.notes,
+        approvedAt: new Date(),
+        approvedById: userId,
+      },
+    });
+
+    await this.auditLogService.log({
+      action: 'APPROVE',
+      entityType: 'WorkRequest',
+      entityId: id,
+      description: `Approved work request ${wr.referenceNo}`,
+      performedById: userId,
+    });
+
+    await this.notificationsService.create({
+      title: 'Work request approved',
+      message: `Your work request ${wr.referenceNo} has been approved.`,
+      userId: wr.requestedById,
+      workRequestId: id,
+    });
+
+    return this.findOne(id);
+  }
+
+  async reject(id: string, userId: string, dto: RejectWorkRequestDto) {
+    const wr = await this.findOne(id);
+    if (wr.status !== RequestStatus.PENDING) {
+      throw new BadRequestException('Only pending work requests can be rejected.');
+    }
+    if (wr.approvalStatus !== ApprovalStatus.PENDING) {
+      throw new BadRequestException('This work request has already been reviewed.');
+    }
+
+    await this.prisma.workRequest.update({
+      where: { id },
+      data: {
+        approvalStatus: ApprovalStatus.REJECTED,
+        rejectionReason: dto.reason,
+        rejectedAt: new Date(),
+        rejectedById: userId,
+        status: RequestStatus.CANCELLED,
+        isActive: false,
+      },
+    });
+
+    await this.auditLogService.log({
+      action: 'REJECT',
+      entityType: 'WorkRequest',
+      entityId: id,
+      description: `Rejected work request ${wr.referenceNo}: ${dto.reason}`,
+      performedById: userId,
+    });
+
+    await this.notificationsService.create({
+      title: 'Work request rejected',
+      message: `Your work request ${wr.referenceNo} was rejected: ${dto.reason}`,
+      userId: wr.requestedById,
+      workRequestId: id,
+    });
+
+    return this.findOne(id);
+  }
+
+  async remove(id: string, userId: string) {
+    const wr = await this.findOne(id);
+    if (wr.status !== RequestStatus.PENDING) {
+      throw new BadRequestException('Only pending work requests can be deleted.');
+    }
+
+    await this.prisma.workRequest.update({
+      where: { id },
+      data: { isActive: false },
+    });
+
+    await this.auditLogService.log({
+      action: 'DELETE',
+      entityType: 'WorkRequest',
+      entityId: id,
+      description: `Deleted work request ${wr.referenceNo}`,
+      performedById: userId,
+    });
+
+    return { message: 'Work request deleted.' };
+  }
+
   async assign(id: string, userId: string, dto: AssignWorkRequestDto) {
     const wr = await this.findOne(id);
-    if (wr.status !== RequestStatus.PENDING && wr.status !== RequestStatus.ASSIGNED) {
-      throw new BadRequestException('Work request cannot be assigned in its current status.');
+
+   const assignableStatuses: RequestStatus[] = [
+  RequestStatus.PENDING,
+  RequestStatus.ASSIGNED,
+  RequestStatus.IN_PROGRESS,
+];
+if (!assignableStatuses.includes(wr.status)) {
+  throw new BadRequestException('Work request cannot be assigned in its current status.');
+}
+
+    if (wr.approvalStatus !== ApprovalStatus.APPROVED) {
+      throw new BadRequestException('Work request must be approved before staff can be assigned.');
     }
 
     const existingAssignment = wr.assignments.find(
@@ -196,7 +331,6 @@ export class WorkRequestsService {
       performedById: userId,
     });
 
-    // ✅ Notify the assigned user
     await this.notificationsService.create({
       title: 'You have been assigned',
       message: `You have been assigned as ${dto.role} to work request ${wr.referenceNo}.`,
@@ -204,7 +338,6 @@ export class WorkRequestsService {
       workRequestId: id,
     });
 
-    // ✅ Notify the requester about the assignment
     await this.notificationsService.create({
       title: 'Work request assigned',
       message: `Your work request ${wr.referenceNo} has been assigned to a team.`,
@@ -217,9 +350,23 @@ export class WorkRequestsService {
 
   async unassign(id: string, assignmentId: string, userId: string) {
     const wr = await this.findOne(id);
+
+    if (
+      wr.status === RequestStatus.COMPLETED ||
+      wr.status === RequestStatus.CANCELLED
+    ) {
+      throw new BadRequestException(
+        'Cannot unassign from a completed or cancelled work request.',
+      );
+    }
+
     const assignment = wr.assignments.find((a) => a.id === assignmentId);
-    if (!assignment || assignment.unassignedAt) {
-      throw new BadRequestException('Assignment not found or already ended.');
+    if (!assignment) {
+      throw new BadRequestException('Assignment not found for this work request.');
+    }
+
+    if (assignment.unassignedAt) {
+      return this.findOne(id);
     }
 
     await this.prisma.workRequestAssignment.update({
@@ -245,7 +392,6 @@ export class WorkRequestsService {
       performedById: userId,
     });
 
-    // ✅ Notify the unassigned user
     await this.notificationsService.create({
       title: 'You have been unassigned',
       message: `You have been removed from work request ${wr.referenceNo}.`,
@@ -256,10 +402,11 @@ export class WorkRequestsService {
     return this.findOne(id);
   }
 
-  async updateProgress(id: string, progressPercent: number, userId: string) {
+  async updateProgress(id: string, progressPercent: number, userId: string, note?: string) {
     if (progressPercent < 0 || progressPercent > 100) {
       throw new BadRequestException('Progress must be between 0 and 100.');
     }
+
     const wr = await this.findOne(id);
     if (wr.status !== RequestStatus.IN_PROGRESS && wr.status !== RequestStatus.ASSIGNED) {
       throw new BadRequestException('Cannot update progress in the current status.');
@@ -270,12 +417,41 @@ export class WorkRequestsService {
         ? RequestStatus.IN_PROGRESS
         : undefined;
 
-    await this.prisma.workRequest.update({
-      where: { id },
-      data: {
-        progressPercent,
-        ...(newStatus && { status: newStatus }),
-      },
+    await this.prisma.$transaction(async (tx) => {
+      await tx.workRequest.update({
+        where: { id },
+        data: {
+          progressPercent,
+          ...(newStatus && { status: newStatus }),
+        },
+      });
+
+      if (progressPercent > 0) {
+        const existingAccomplishment = await tx.workRequestAccomplishment.findUnique({
+          where: { workRequestId: id },
+        });
+
+        if (existingAccomplishment) {
+          if (!existingAccomplishment.dateTimeStarted || note) {
+            await tx.workRequestAccomplishment.update({
+              where: { id: existingAccomplishment.id },
+              data: {
+                dateTimeStarted: existingAccomplishment.dateTimeStarted ?? new Date(),
+                comments: note ?? existingAccomplishment.comments,
+              },
+            });
+          }
+        } else {
+          await tx.workRequestAccomplishment.create({
+            data: {
+              workRequestId: id,
+              bgPersonnelId: userId,
+              dateTimeStarted: new Date(),
+              comments: note,
+            },
+          });
+        }
+      }
     });
 
     await this.auditLogService.log({
@@ -286,7 +462,6 @@ export class WorkRequestsService {
       performedById: userId,
     });
 
-    // ✅ Notify the requester
     await this.notificationsService.create({
       title: 'Progress updated',
       message: `Work request ${wr.referenceNo} is now ${progressPercent}% complete.`,
@@ -297,38 +472,122 @@ export class WorkRequestsService {
     return this.findOne(id);
   }
 
-  async complete(id: string, userId: string, dto: CompleteWorkRequestDto) {
+  async complete(
+    id: string,
+    userId: string,
+    dto: CompleteWorkRequestDto,
+    userRole?: string,
+  ) {
     const wr = await this.findOne(id);
-    if (wr.status !== RequestStatus.IN_PROGRESS && wr.status !== RequestStatus.ASSIGNED) {
-      throw new BadRequestException('Work request cannot be completed in its current status.');
-    }
+    const isPrivileged = userRole ? PRIVILEGED_ROLES.includes(userRole) : false;
 
-    const updated = await this.prisma.$transaction(async (tx) => {
-      await tx.workRequest.update({
-        where: { id },
-        data: { status: RequestStatus.COMPLETED, progressPercent: 100 },
-      });
+    // ---------- 1. Rating / feedback update (work request already completed) ----------
+    if (wr.status === RequestStatus.COMPLETED) {
+      if (!isPrivileged && wr.requestedById !== userId) {
+        throw new ForbiddenException(
+          'Only the requester can submit feedback for this work request.',
+        );
+      }
 
-      await tx.workRequestAccomplishment.create({
+      if (!wr.accomplishment) {
+        throw new BadRequestException(
+          'This work request has no completion record. Please contact an administrator.',
+        );
+      }
+
+      await this.prisma.workRequestAccomplishment.update({
+        where: { id: wr.accomplishment.id },
         data: {
-          workRequestId: id,
-          bgPersonnelId: userId,
-          dateTimeStarted: dto.dateTimeStarted ? new Date(dto.dateTimeStarted) : undefined,
-          dateTimeCompleted: dto.dateTimeCompleted
-            ? new Date(dto.dateTimeCompleted)
-            : new Date(),
-          completionDetails: dto.completionDetails as object,
           serviceRating: dto.serviceRating,
           expectationRating: dto.expectationRating,
           comments: dto.comments,
+          completionDetails: dto.completionDetails
+            ? (dto.completionDetails as object)
+            : undefined,
         },
       });
 
       await this.auditLogService.log({
-        action: 'COMPLETE',
+        action: 'COMPLETE_UPDATE',
         entityType: 'WorkRequest',
         entityId: id,
-        description: `Work request ${wr.referenceNo} completed`,
+        description: `Updated feedback for work request ${wr.referenceNo}`,
+        performedById: userId,
+      });
+
+      const activeAssignees = wr.assignments.filter(
+        (a) => !a.unassignedAt && a.userId !== userId,
+      );
+      for (const assignment of activeAssignees) {
+        await this.notificationsService.create({
+          title: 'Work request rated',
+          message: `Your work on ${wr.referenceNo} has been rated.`,
+          userId: assignment.userId,
+          workRequestId: id,
+        });
+      }
+
+      return this.findOne(id);
+    }
+
+    // ---------- 2. Staff completion (first time) ----------
+    if (wr.status !== RequestStatus.IN_PROGRESS && wr.status !== RequestStatus.ASSIGNED) {
+      throw new BadRequestException('Work request cannot be completed in its current status.');
+    }
+
+    const cannotBeRepaired = (dto.completionDetails as any)?.cannotBeRepaired === true;
+
+    const updated = await this.prisma.$transaction(async (tx) => {
+      await tx.workRequest.update({
+        where: { id },
+        data: {
+          status: cannotBeRepaired ? RequestStatus.CANCELLED : RequestStatus.COMPLETED,
+          progressPercent: 100,
+          isActive: !cannotBeRepaired,
+        },
+      });
+
+      if (wr.accomplishment) {
+        await tx.workRequestAccomplishment.update({
+          where: { id: wr.accomplishment.id },
+          data: {
+            dateTimeStarted:
+              dto.dateTimeStarted
+                ? new Date(dto.dateTimeStarted)
+                : wr.accomplishment.dateTimeStarted ?? new Date(),
+            dateTimeCompleted: dto.dateTimeCompleted
+              ? new Date(dto.dateTimeCompleted)
+              : new Date(),
+            completionDetails: dto.completionDetails as object,
+            serviceRating: dto.serviceRating,
+            expectationRating: dto.expectationRating,
+            comments: dto.comments,
+          },
+        });
+      } else {
+        await tx.workRequestAccomplishment.create({
+          data: {
+            workRequestId: id,
+            bgPersonnelId: userId,
+            dateTimeStarted: dto.dateTimeStarted ? new Date(dto.dateTimeStarted) : new Date(),
+            dateTimeCompleted: dto.dateTimeCompleted
+              ? new Date(dto.dateTimeCompleted)
+              : new Date(),
+            completionDetails: dto.completionDetails as object,
+            serviceRating: dto.serviceRating,
+            expectationRating: dto.expectationRating,
+            comments: dto.comments,
+          },
+        });
+      }
+
+      await this.auditLogService.log({
+        action: cannotBeRepaired ? 'CANCELLED' : 'COMPLETE',
+        entityType: 'WorkRequest',
+        entityId: id,
+        description: cannotBeRepaired
+          ? `Work request ${wr.referenceNo} cancelled due to irreparable item`
+          : `Work request ${wr.referenceNo} completed`,
         performedById: userId,
       });
 
@@ -338,13 +597,21 @@ export class WorkRequestsService {
       });
     });
 
-    // ✅ Notify the requester
-    await this.notificationsService.create({
-      title: 'Work request completed',
-      message: `Your work request ${wr.referenceNo} has been completed.`,
-      userId: wr.requestedById,
-      workRequestId: id,
-    });
+    if (cannotBeRepaired) {
+      await this.notificationsService.create({
+        title: 'Work request cancelled',
+        message: `Work request ${wr.referenceNo} has been cancelled because the item cannot be repaired.`,
+        userId: wr.requestedById,
+        workRequestId: id,
+      });
+    } else {
+      await this.notificationsService.create({
+        title: 'Work request completed',
+        message: `Your work request ${wr.referenceNo} has been completed.`,
+        userId: wr.requestedById,
+        workRequestId: id,
+      });
+    }
 
     return updated;
   }
@@ -368,7 +635,6 @@ export class WorkRequestsService {
       performedById: userId,
     });
 
-    // ✅ Notify the requester
     await this.notificationsService.create({
       title: 'Work request cancelled',
       message: `Your work request ${wr.referenceNo} has been cancelled.`,

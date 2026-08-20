@@ -12,7 +12,7 @@ import {
   Min,
 } from 'class-validator';
 import { Type } from 'class-transformer';
-import { RequestType, Campus } from '@prisma/client';
+import { RequestType, Campus, RequestPriority } from '@prisma/client';
 
 class WorkRequestItemDto {
   @IsString()
@@ -53,6 +53,14 @@ export class CreateWorkRequestDto {
   @IsOptional()
   @IsString()
   maintenanceScheduleId?: string;
+
+  @IsOptional()
+  @IsEnum(RequestPriority)
+  priority?: RequestPriority;
+
+  @IsOptional()
+  @IsString()
+  requestedById?: string; // manual creation on behalf of someone
 
   @IsArray()
   @ValidateNested({ each: true })

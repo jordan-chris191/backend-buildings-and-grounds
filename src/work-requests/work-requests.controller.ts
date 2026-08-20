@@ -1,6 +1,8 @@
+// src/work-requests/work-requests.controller.ts
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Post,
   Patch,
@@ -15,6 +17,8 @@ import { CreateWorkRequestDto } from './dto/create-work-request.dto';
 import { UpdateWorkRequestDto } from './dto/update-work-request.dto';
 import { AssignWorkRequestDto } from './dto/assign-work-request.dto';
 import { CompleteWorkRequestDto } from './dto/complete-work-request.dto';
+import { ApproveWorkRequestDto } from './dto/approve-work-request.dto';
+import { RejectWorkRequestDto } from './dto/reject-work-request.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
@@ -34,11 +38,20 @@ export class WorkRequestsController {
   @UseGuards(JwtAuthGuard)
   @Get()
   findAll(
+    @Req() req,
     @Query('status') status?: RequestStatus,
-    // ✅ FIXED: ParseEnumPipe ensures valid Campus and transforms to enum
     @Query('campus', new ParseEnumPipe(Campus, { optional: true })) campus?: Campus,
+    @Query('assignedToMe') assignedToMe?: string,
+    @Query('includeInactive') includeInactive?: string,
   ) {
-    return this.workRequestsService.findAll(status, campus);
+    const assignedToUserId = assignedToMe === 'true' ? req.user.userId : undefined;
+    const includeInactiveFlag = includeInactive === 'true';
+    return this.workRequestsService.findAll(
+      status,
+      campus,
+      assignedToUserId,
+      includeInactiveFlag,
+    );
   }
 
   @UseGuards(JwtAuthGuard)
@@ -56,6 +69,35 @@ export class WorkRequestsController {
     @Body() dto: UpdateWorkRequestDto,
   ) {
     return this.workRequestsService.update(id, req.user.userId, dto);
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('Administrator', 'Building & Grounds Officer')
+  @Patch(':id/approve')
+  approve(
+    @Param('id') id: string,
+    @Req() req,
+    @Body() dto: ApproveWorkRequestDto,
+  ) {
+    return this.workRequestsService.approve(id, req.user.userId, dto);
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('Administrator', 'Building & Grounds Officer')
+  @Patch(':id/reject')
+  reject(
+    @Param('id') id: string,
+    @Req() req,
+    @Body() dto: RejectWorkRequestDto,
+  ) {
+    return this.workRequestsService.reject(id, req.user.userId, dto);
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('Administrator')
+  @Delete(':id')
+  remove(@Param('id') id: string, @Req() req) {
+    return this.workRequestsService.remove(id, req.user.userId);
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
@@ -81,25 +123,30 @@ export class WorkRequestsController {
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('Administrator', 'Building & Grounds Officer', 'Property Custodian')
+  @Roles('Administrator', 'Building & Grounds Officer', 'Property Custodian', 'Staff')
   @Patch(':id/progress')
   updateProgress(
     @Param('id') id: string,
     @Req() req,
-    @Body('progressPercent') progressPercent: number,
+    @Body() body: { progressPercent: number; note?: string },
   ) {
-    return this.workRequestsService.updateProgress(id, progressPercent, req.user.userId);
+    return this.workRequestsService.updateProgress(
+      id,
+      body.progressPercent,
+      req.user.userId,
+      body.note,
+    );
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('Administrator', 'Building & Grounds Officer', 'Property Custodian')
+  @Roles('Administrator', 'Building & Grounds Officer', 'Property Custodian', 'Staff', 'Office')
   @Patch(':id/complete')
   complete(
     @Param('id') id: string,
     @Req() req,
     @Body() dto: CompleteWorkRequestDto,
   ) {
-    return this.workRequestsService.complete(id, req.user.userId, dto);
+    return this.workRequestsService.complete(id, req.user.userId, dto, req.user.role);
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
