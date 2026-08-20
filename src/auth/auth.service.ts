@@ -25,6 +25,19 @@ const REFRESH_EXPIRES_DAYS = parseInt(
   10,
 );
 
+// Whitelisted fields for any endpoint that returns a User row.
+// Never include passwordHash here.
+const SAFE_USER_SELECT = {
+  id: true,
+  email: true,
+  firstName: true,
+  lastName: true,
+  isActive: true,
+  role: { select: { id: true, name: true } },
+  position: { select: { id: true, name: true } },
+  office: { select: { id: true, name: true, campus: true } },
+} as const;
+
 @Injectable()
 export class AuthService {
   constructor(
@@ -380,15 +393,24 @@ export class AuthService {
     };
   }
 
-  async findUsers(positionId?: string, roleId?: string, officeId?: string) {
+  // ---------------------------------------------------------
+  // FIND USERS (list, with filters)
+  // ---------------------------------------------------------
+  async findUsers(
+    positionId?: string,
+    roleId?: string,
+    officeId?: string,
+    roleName?: string,
+  ) {
     return this.prisma.user.findMany({
       where: {
         ...(positionId ? { positionId } : {}),
         ...(roleId ? { roleId } : {}),
         ...(officeId ? { officeId } : {}),
+        ...(roleName ? { role: { name: roleName } } : {}),
         isActive: true,
       },
-      include: { role: true, position: true, office: true },
+      select: SAFE_USER_SELECT,
       orderBy: { firstName: 'asc' },
     });
   }
@@ -425,7 +447,7 @@ export class AuthService {
     const updated = await this.prisma.user.update({
       where: { id: userId },
       data: { roleId: newRoleId },
-      include: { role: true },
+      select: SAFE_USER_SELECT,
     });
 
     await this.auditLogService.log({
@@ -458,13 +480,7 @@ export class AuthService {
     const updated = await this.prisma.user.update({
       where: { id: userId },
       data: { officeId: officeId ?? null },
-      select: {
-        id: true,
-        email: true,
-        firstName: true,
-        lastName: true,
-        office: { select: { id: true, name: true, campus: true } },
-      },
+      select: SAFE_USER_SELECT,
     });
 
     await this.auditLogService.log({
@@ -506,6 +522,7 @@ export class AuthService {
     const updated = await this.prisma.user.update({
       where: { id: userId },
       data: { isActive: false },
+      select: SAFE_USER_SELECT,
     });
 
     // Revoke all their active sessions immediately
@@ -519,6 +536,36 @@ export class AuthService {
       entityType: 'User',
       entityId: userId,
       description: `Deactivated user ${user.email}`,
+      performedById,
+    });
+
+    return updated;
+  }
+
+  // ---------------------------------------------------------
+  // REACTIVATE USER
+  // ---------------------------------------------------------
+  async reactivateUser(userId: string, performedById: string) {
+    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    const updated = await this.prisma.user.update({
+      where: { id: userId },
+      data: {
+        isActive: true,
+        failedLoginAttempts: 0,
+        lockedUntil: null,
+      },
+      select: SAFE_USER_SELECT,
+    });
+
+    await this.auditLogService.log({
+      action: 'REACTIVATE',
+      entityType: 'User',
+      entityId: userId,
+      description: `Reactivated user ${user.email}`,
       performedById,
     });
 

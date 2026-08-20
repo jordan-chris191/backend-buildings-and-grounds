@@ -23,6 +23,7 @@ import { CreateUserDto } from './dto/create-user.dto';
 import { ChangeRoleDto } from './dto/change-role.dto';
 import { ChangeOfficeDto } from './dto/change-office.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
+
 @Controller('auth')
 export class AuthController {
   constructor(private authService: AuthService) {}
@@ -72,8 +73,13 @@ export class AuthController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('Administrator', 'Building & Grounds Officer')
   @Get('users')
-  findUsers(@Query('positionId') positionId?: string, @Query('roleId') roleId?: string) {
-    return this.authService.findUsers(positionId, roleId);
+  findUsers(
+    @Query('positionId') positionId?: string,
+    @Query('roleId') roleId?: string,
+    @Query('officeId') officeId?: string,
+    @Query('roleName') roleName?: string,
+  ) {
+    return this.authService.findUsers(positionId, roleId, officeId, roleName);
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
@@ -97,16 +103,23 @@ export class AuthController {
     return this.authService.deactivateUser(id, req.user.userId);
   }
 
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('Administrator')
+  @Patch('users/:id/reactivate')
+  reactivateUser(@Param('id') id: string, @Req() req) {
+    return this.authService.reactivateUser(id, req.user.userId);
+  }
+
   @UseGuards(JwtAuthGuard)
-@Patch('change-password')
-async changePassword(
-  @Req() req,
-  @Body() dto: ChangePasswordDto,   // ← validated automatically
-) {
-  return this.authService.changePassword(
-    req.user.userId,
-    dto.currentPassword,
-    dto.newPassword,
-  );
-}
+  @Patch('change-password')
+  async changePassword(
+    @Req() req,
+    @Body() dto: ChangePasswordDto, // ← validated automatically
+  ) {
+    return this.authService.changePassword(
+      req.user.userId,
+      dto.currentPassword,
+      dto.newPassword,
+    );
+  }
 }
