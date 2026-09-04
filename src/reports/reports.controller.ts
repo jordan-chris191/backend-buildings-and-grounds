@@ -16,9 +16,4 @@ export class ReportsController {
   workRequestsByStatus() {
     return this.reportsService.workRequestsByStatus();
   }
-
-  @Get('budget-utilization')
-  budgetUtilization() {
-    return this.reportsService.budgetUtilization();
-  }
 }

@@ -16,10 +16,8 @@ import { ProjectsModule } from './projects/projects.module';
 import { TransactionsModule } from './transactions/transactions.module';
 import { PersonsModule } from './persons/persons.module';
 import { OfficesModule } from './offices/offices.module';
-import { PurchaseRequestsModule } from './purchase-requests/purchase-requests.module';
 import { AssetTransfersModule } from './asset-transfers/asset-transfers.module';
 import { CategoriesModule } from './categories/categories.module';
-import { BudgetModule } from './budget/budget.module';
 import { RolesModule } from './roles/roles.module';
 import { ReportsModule } from './reports/reports.module';
 import { BorrowRequestsModule } from './borrow-requests/borrow-requests.module';
@@ -49,12 +47,10 @@ import { MaintenanceUnitTypeConfigsModule } from './maintenanc-unit-type-configs
     ProjectsModule,
     TransactionsModule,
     OfficesModule,
-    PurchaseRequestsModule,
     AssetTransfersModule,
     CategoriesModule,
     RolesModule,
     ReportsModule,
-    BudgetModule,
     BorrowRequestsModule,
     GatewayModule,
     StockMovementsModule,

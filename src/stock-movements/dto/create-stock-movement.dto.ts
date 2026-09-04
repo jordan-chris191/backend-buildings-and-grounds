@@ -34,7 +34,4 @@ export class CreateStockMovementDto {
   @IsString()
   referenceId?: string;
 
-  @IsOptional()
-  @IsUUID()
-  purchaseRequestId?: string;
 }

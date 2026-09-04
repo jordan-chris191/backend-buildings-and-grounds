@@ -38,18 +38,4 @@ export class ReportsService {
     return grouped.map((g) => ({ status: g.status, count: g._count }));
   }
 
-  async budgetUtilization() {
-    const budgets = await this.prisma.annualBudget.findMany({
-      where: { isActive: true },
-      include: { allocations: { where: { isActive: true } } },
-    });
-    return budgets.map((b) => ({
-      year: b.year,
-      totalAmount: b.totalAmount.toNumber(),
-      allocated: b.allocations.reduce(
-        (sum, a) => sum + a.allocatedAmount.toNumber(),
-        0,
-      ),
-    }));
-  }
 }

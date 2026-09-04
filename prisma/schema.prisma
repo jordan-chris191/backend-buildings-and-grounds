@@ -42,8 +42,6 @@ model User {
   createdMaintenanceSchedules MaintenanceSchedule[]       @relation("MaintenanceCreator")
   notifications               Notification[]              @relation("UserNotifications")
   passwordResetTokens         PasswordResetToken[]        @relation("UserPasswordResetTokens")
-  approvedPurchaseRequests    PurchaseRequest[]           @relation("ApprovedPurchaseRequests")
-  requestedPurchaseRequests   PurchaseRequest[]           @relation("RequestedPurchaseRequests")
   refreshTokens               RefreshToken[]              @relation("UserRefreshTokens")
   stockMovementsPerformed     StockMovement[]             @relation("StockMovementPerformer")
   office                      Office?                     @relation("UserOffice", fields: [officeId], references: [id])
@@ -110,7 +108,6 @@ model Office {
   isActive         Boolean           @default(true)
   createdAt        DateTime          @default(now())
   updatedAt        DateTime          @updatedAt
-  purchaseRequests PurchaseRequest[] @relation("OfficePurchaseRequests")
   users            User[]            @relation("UserOffice")
   workRequests     WorkRequest[]     @relation("OfficeWorkRequests")
 
@@ -147,36 +144,6 @@ model Position {
   assetTypeConfigs AssetTypeConfig[] @relation("AssetTypeConfigPosition")
 }
 
-model AnnualBudget {
-  id          String             @id @default(uuid())
-  year        Int                @unique
-  totalAmount Decimal            @db.Decimal(19, 4)
-  description String?
-  isActive    Boolean            @default(true)
-  createdAt   DateTime           @default(now())
-  updatedAt   DateTime           @updatedAt
-  allocations BudgetAllocation[] @relation("BudgetAllocations")
-}
-
-model BudgetAllocation {
-  id               String            @id @default(uuid())
-  name             String
-  trade            Trade
-  allocatedAmount  Decimal           @db.Decimal(19, 4)
-  annualBudgetId   String
-  projectId        String?
-  isActive         Boolean           @default(true)
-  createdAt        DateTime          @default(now())
-  updatedAt        DateTime          @updatedAt
-  annualBudget     AnnualBudget      @relation("BudgetAllocations", fields: [annualBudgetId], references: [id])
-  project          Project?          @relation("ProjectBudgetAllocations", fields: [projectId], references: [id])
-  purchaseRequests PurchaseRequest[] @relation("PurchaseRequestBudget")
-
-  @@index([annualBudgetId])
-  @@index([projectId])
-  @@index([trade])
-}
-
 model Project {
   id                String             @id @default(uuid())
   name              String
@@ -190,10 +157,7 @@ model Project {
   type              ProjectType
   isActive          Boolean            @default(true)
   updatedAt         DateTime           @updatedAt
-  budgetAllocations BudgetAllocation[] @relation("ProjectBudgetAllocations")
   items             InventoryItem[]    @relation("ProjectInventory")
-  materialEstimates MaterialEstimate[] @relation("ProjectEstimates")
-  purchaseRequests  PurchaseRequest[]  @relation("ProjectPurchaseRequests")
 
   @@index([campus])
   @@index([isActive])
@@ -218,13 +182,11 @@ model InventoryItem {
   categoryId              String?
   campus                  Campus
   status                  ItemStatus @default(GOOD_CONDITION)
-  sourcePurchaseRequestId String?
 
   transfers             AssetTransfer[]       @relation("ItemTransfers")
   borrowRequests        BorrowRequest[]       @relation("BorrowRequests")
   category              ItemCategory?         @relation("CategoryInventoryItems", fields: [categoryId], references: [id])
   project               Project?              @relation("ProjectInventory", fields: [projectId], references: [id])
-  sourcePurchaseRequest PurchaseRequest?      @relation("SourcedInventoryItems", fields: [sourcePurchaseRequestId], references: [id])
   transactions          ItemTransaction[]     @relation("InventoryTransactions")
   maintenanceSchedules  MaintenanceSchedule[] @relation("ItemMaintenanceSchedules")
   stockMovements        StockMovement[]       @relation("ItemStockMovements")
@@ -237,7 +199,6 @@ model InventoryItem {
   @@index([status])
   @@index([campus])
   @@index([isActive])
-  @@index([sourcePurchaseRequestId])
 }
 
 model ItemCategory {
@@ -261,14 +222,11 @@ model StockMovement {
   performedById     String
   createdAt         DateTime          @default(now())
   movementType      StockMovementType
-  purchaseRequestId String?
   inventoryItem     InventoryItem     @relation("ItemStockMovements", fields: [inventoryItemId], references: [id])
   performedBy       User              @relation("StockMovementPerformer", fields: [performedById], references: [id])
-  purchaseRequest   PurchaseRequest?  @relation("PurchaseStockMovements", fields: [purchaseRequestId], references: [id])
 
   @@index([inventoryItemId])
   @@index([createdAt])
-  @@index([purchaseRequestId])
 }
 
 model ItemTransaction {
@@ -517,69 +475,6 @@ model RunHourReading {
   @@index([recordedById])
 }
 
-model MaterialEstimate {
-  id                   String                @id @default(uuid())
-  category             String?
-  itemNo               String?
-  description          String
-  quantity             Decimal               @db.Decimal(15, 4)
-  unit                 String
-  unitCost             Decimal               @db.Decimal(19, 4)
-  createdAt            DateTime              @default(now())
-  projectId            String
-  updatedAt            DateTime              @updatedAt
-  project              Project               @relation("ProjectEstimates", fields: [projectId], references: [id], onDelete: Cascade)
-  purchaseRequestItems PurchaseRequestItem[] @relation("EstimatePRItems")
-
-  @@index([projectId])
-}
-
-model PurchaseRequest {
-  id                    String                @id @default(uuid())
-  controlNo             String                @unique
-  purpose               String?
-  status                PurchaseRequestStatus @default(PENDING)
-  createdAt             DateTime              @default(now())
-  updatedAt             DateTime              @updatedAt
-  projectId             String?
-  requestedById         String
-  approvedById          String?
-  approvedAt            DateTime?
-  budgetAllocationId    String?
-  isActive              Boolean               @default(true)
-  requestingOfficeId    String?
-  sourcedInventoryItems InventoryItem[]       @relation("SourcedInventoryItems")
-  approvedBy            User?                 @relation("ApprovedPurchaseRequests", fields: [approvedById], references: [id])
-  budgetAllocation      BudgetAllocation?     @relation("PurchaseRequestBudget", fields: [budgetAllocationId], references: [id])
-  project               Project?              @relation("ProjectPurchaseRequests", fields: [projectId], references: [id])
-  requestedBy           User                  @relation("RequestedPurchaseRequests", fields: [requestedById], references: [id])
-  requestingOffice      Office?               @relation("OfficePurchaseRequests", fields: [requestingOfficeId], references: [id])
-  items                 PurchaseRequestItem[] @relation("PRItems")
-  stockMovements        StockMovement[]       @relation("PurchaseStockMovements")
-
-  @@index([projectId])
-  @@index([requestedById])
-  @@index([status])
-  @@index([budgetAllocationId])
-  @@index([requestingOfficeId])
-}
-
-model PurchaseRequestItem {
-  id                 String            @id @default(uuid())
-  description        String
-  quantity           Decimal           @db.Decimal(15, 4)
-  unit               String
-  unitCost           Decimal           @db.Decimal(19, 4)
-  purchaseRequestId  String
-  materialEstimateId String?
-  createdAt          DateTime          @default(now())
-  updatedAt          DateTime          @updatedAt
-  materialEstimate   MaterialEstimate? @relation("EstimatePRItems", fields: [materialEstimateId], references: [id])
-  purchaseRequest    PurchaseRequest   @relation("PRItems", fields: [purchaseRequestId], references: [id], onDelete: Cascade)
-
-  @@index([purchaseRequestId])
-}
-
 model AuditLog {
   id            String   @id @default(uuid())
   action        String
@@ -727,14 +622,6 @@ enum RequestStatus {
 enum AssignmentRole {
   LEAD
   MEMBER
-}
-
-enum PurchaseRequestStatus {
-  DRAFT
-  PENDING
-  APPROVED
-  REJECTED
-  COMPLETED
 }
 
 enum BorrowRequestStatus {

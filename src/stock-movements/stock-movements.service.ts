@@ -31,12 +31,6 @@ export class StockMovementsService {
         lastName: true,
       },
     },
-    purchaseRequest: {
-      select: {
-        id: true,
-        controlNo: true,   // ✅ corrected from prNumber
-      },
-    },
   };
 
   private toDecimal(value: number): Prisma.Decimal {
@@ -85,13 +79,8 @@ export class StockMovementsService {
       );
     }
 
-    if (dto.purchaseRequestId) {
-      const purchaseRequest = await this.prisma.purchaseRequest.findUnique({
-        where: { id: dto.purchaseRequestId },
-      });
-      if (!purchaseRequest) {
-        throw new BadRequestException('Purchase request not found.');
-      }
+    if (dto.referenceId) {
+      // Note: Generic reference - actual entity validation depends on referenceType
     }
 
     return this.prisma.$transaction(async (tx) => {
@@ -112,7 +101,6 @@ export class StockMovementsService {
           referenceId: dto.referenceId,
           inventoryItemId: dto.inventoryItemId,
           performedById: userId,
-          purchaseRequestId: dto.purchaseRequestId,
         },
         include: this.defaultInclude,
       });

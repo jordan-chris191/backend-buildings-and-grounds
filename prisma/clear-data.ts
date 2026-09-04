@@ -19,19 +19,14 @@ async function main() {
   await prisma.maintenanceSchedule.deleteMany({});         // FK InventoryItem (Cascade), User (Restrict)
   await prisma.assetTransfer.deleteMany({});               // FK InventoryItem (Cascade), User (Restrict)
 
-  // 4. Delete Procurement records
-  await prisma.purchaseRequestItem.deleteMany({});         // FK PurchaseRequest (Cascade)
-  await prisma.purchaseRequest.deleteMany({});             // FK User (Restrict), etc.
-  await prisma.materialEstimate.deleteMany({});            // FK Project (Cascade)
-
-  // 5. Delete Work Requests & Inventory (after their children are gone)
+  // 4. Delete Work Requests & Inventory (after their children are gone)
   await prisma.workRequest.deleteMany({});                 // FK User (Restrict), etc.
   await prisma.inventoryItem.deleteMany({});               // FK Project, Category, etc.
 
-  // 6. Delete Users (after all records referencing them are cleared)
+  // 5. Delete Users (after all records referencing them are cleared)
   await prisma.user.deleteMany({});
 
-  // 7. Delete remaining master / reference data
+  // 6. Delete remaining master / reference data
   await prisma.itemCategory.deleteMany({});
   await prisma.position.deleteMany({});
   await prisma.role.deleteMany({});
@@ -39,10 +34,6 @@ async function main() {
   await prisma.office.deleteMany({});
   await prisma.sequenceCounter.deleteMany({});
   await prisma.person.deleteMany({});                      // if you have Person data
-
-  // Budget tables (if they are in use)
-  await prisma.budgetAllocation.deleteMany({});
-  await prisma.annualBudget.deleteMany({});
 
   console.log('✅ All data cleared successfully.');
 }
