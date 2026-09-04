@@ -8,6 +8,7 @@ import {
   Req,
   UseGuards,
 } from '@nestjs/common';
+import { RecordRunHoursDto } from './dto/record-run-hours.dto';
 import { MaintenanceSchedulesService } from './maintenance-schedules.service';
 import { CreateMaintenanceScheduleDto } from './dto/create-maintenance-schedule.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -52,4 +53,15 @@ export class MaintenanceSchedulesController {
   deactivate(@Param('id') id: string, @Req() req) {   // ✅ added @Req()
     return this.maintenanceSchedulesService.deactivate(id, req.user.userId);
   }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+@Roles('Administrator', 'Building & Grounds Officer')
+@Patch(':id/run-hours')
+recordRunHours(
+  @Param('id') id: string,
+  @Req() req,
+  @Body() dto: RecordRunHoursDto,
+) {
+  return this.maintenanceSchedulesService.recordRunHours(id, req.user.userId, dto);
+}
 }

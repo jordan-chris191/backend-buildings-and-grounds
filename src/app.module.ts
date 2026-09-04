@@ -25,6 +25,9 @@ import { ReportsModule } from './reports/reports.module';
 import { BorrowRequestsModule } from './borrow-requests/borrow-requests.module';
 import { GatewayModule } from './gateway/gateway.module';
 import { StockMovementsModule } from './stock-movements/stock-movements.module';
+import { MaintainableAssetProfilesModule } from './maintainable-asset-profile/maintainable-asset-profiles.module';
+import { AssetTypeConfigsModule } from './asset-type-configs/asset-type-configs.module';
+import { MaintenanceUnitTypeConfigsModule } from './maintenanc-unit-type-configs/maintenance-unit-type-configs.module';
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
@@ -54,7 +57,10 @@ import { StockMovementsModule } from './stock-movements/stock-movements.module';
     BudgetModule,
     BorrowRequestsModule,
     GatewayModule,
-    StockMovementsModule
+    StockMovementsModule,
+    MaintainableAssetProfilesModule,
+    AssetTypeConfigsModule,
+    MaintenanceUnitTypeConfigsModule
   ],
   controllers: [AppController],
   providers: [

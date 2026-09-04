@@ -9,7 +9,7 @@ import { AuditLogModule } from '../audit-log/audit-log.module';   // ← add thi
   imports: [
     PrismaModule,
     AuthModule,
-    AuditLogModule,   // ← add this line
+    AuditLogModule,   
   ],
   controllers: [MaintenanceSchedulesController],
   providers: [MaintenanceSchedulesService],

@@ -5,18 +5,23 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditLogService } from '../audit-log/audit-log.service';
+import { RecordRunHoursDto } from './dto/record-run-hours.dto';
 import { CreateMaintenanceScheduleDto } from './dto/create-maintenance-schedule.dto';
-import { RequestType, RequestStatus, Prisma } from '@prisma/client';
+import { RequestType, Prisma, MaintenanceBasis, AssetTypeConfig } from '@prisma/client';
 
 @Injectable()
 export class MaintenanceSchedulesService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly auditLogService: AuditLogService,
-  ) {}
+  ) {}s
 
   private readonly defaultInclude = {
-    inventoryItem: true,
+    inventoryItem: {
+      include: {
+        maintainableAssetProfile: { include: { unitTypeConfig: true } },
+      },
+    },
     createdBy: {
       select: { id: true, firstName: true, lastName: true },
     },
@@ -24,69 +29,152 @@ export class MaintenanceSchedulesService {
   };
 
   async create(userId: string, dto: CreateMaintenanceScheduleDto) {
-    // Step 1: create the schedule (before generating work request, to get its id)
+    // Step 1: validate the item exists and is tagged as maintainable
+    const item = await this.prisma.inventoryItem.findUnique({
+      where: { id: dto.inventoryItemId },
+      include: {
+        maintainableAssetProfile: { include: { unitTypeConfig: true } },
+      },
+    });
+    if (!item) {
+      throw new BadRequestException('Inventory item not found.');
+    }
+    if (!item.maintainableAssetProfile) {
+      throw new BadRequestException(
+        'This inventory item has no maintainable-asset profile. Create one via /maintainable-asset-profiles before scheduling maintenance.',
+      );
+    }
+
+    // Step 2: resolve frequencyDays (explicit value, or fall back to unit type config default)
+    let frequencyDays = dto.frequencyDays;
+    if (dto.basis === MaintenanceBasis.CALENDAR && !frequencyDays) {
+      frequencyDays = item.maintainableAssetProfile.unitTypeConfig?.defaultCooldownDays;
+    }
+    if (dto.basis === MaintenanceBasis.CALENDAR && !frequencyDays) {
+      throw new BadRequestException(
+        "frequencyDays is required for CALENDAR schedules (directly, or via the profile's unit type config).",
+      );
+    }
+    if (dto.basis === MaintenanceBasis.RUNTIME && !dto.frequencyHours) {
+      throw new BadRequestException('frequencyHours is required for RUNTIME schedules.');
+    }
+
+       // Step 3: create the schedule
+    if (dto.basis === MaintenanceBasis.CALENDAR && !dto.nextDueAt) {
+      throw new BadRequestException('nextDueAt is required for CALENDAR schedules.');
+    }
+
     const schedule = await this.prisma.maintenanceSchedule.create({
       data: {
         title: dto.title,
-        frequencyDays: dto.frequencyDays,
-        nextDueAt: new Date(dto.nextDueAt),
+        basis: dto.basis,
+        frequencyDays: dto.basis === MaintenanceBasis.CALENDAR ? frequencyDays : null,
+        nextDueAt:
+          dto.basis === MaintenanceBasis.CALENDAR
+            ? new Date(dto.nextDueAt!)
+            : null,
+        frequencyHours:
+          dto.basis === MaintenanceBasis.RUNTIME
+            ? new Prisma.Decimal(dto.frequencyHours!)
+            : null,
+        nextDueAtHours:
+          dto.basis === MaintenanceBasis.RUNTIME
+            ? new Prisma.Decimal(dto.frequencyHours!)
+            : null,
+        notes: dto.notes,
         inventoryItemId: dto.inventoryItemId,
         createdById: userId,
       },
       include: this.defaultInclude,
     });
 
-    // Step 2: find or create the BG Office and get its id
-    const office = await this.prisma.office.upsert({
-      where: {
-        name_campus: {
-          name: 'BG Office',
-          campus: schedule.inventoryItem.campus,
-        },
-      },
-      update: {},
-      create: {
-        name: 'BG Office',
-        campus: schedule.inventoryItem.campus,
-      },
-    });
-
-    // Step 3: generate a unique reference number for the work request
-    const referenceNo = await this.generateWorkRequestReferenceNo();
-
-    // Step 4: create the initial work request with the generated reference
-    await this.prisma.workRequest.create({
-      data: {
-        referenceNo,                              // <-- required field added
-        requestType: RequestType.REGULAR_MAINTENANCE,
-        particulars: `Scheduled: ${schedule.title}`,
-        campus: schedule.inventoryItem.campus,
-        requestedById: userId,
-        requestingOfficeId: office.id,
-        maintenanceScheduleId: schedule.id,
-        items: {
-          create: [
-            {
-              inventoryItemId: schedule.inventoryItemId,
-              quantity: new Prisma.Decimal(1),
-              description: 'Scheduled maintenance',
-            },
-          ],
-        },
-      },
-    });
+    // Step 4: only CALENDAR schedules auto-generate an initial work request
+    if (dto.basis === MaintenanceBasis.CALENDAR) {
+      await this.createWorkRequestForSchedule(schedule, item, userId);
+    }
 
     // Step 5: audit log
     await this.auditLogService.log({
       action: 'CREATE',
       entityType: 'MaintenanceSchedule',
       entityId: schedule.id,
-      description: `Created maintenance schedule "${schedule.title}" for item ${schedule.inventoryItemId}`,
+      description: `Created maintenance schedule "${schedule.title}" (${schedule.basis}) for item ${item.name}`,
       performedById: userId,
     });
 
     return this.findOne(schedule.id);
   }
+
+private async createWorkRequestForSchedule(
+  schedule: { id: string; title: string; inventoryItemId: string; basis: MaintenanceBasis },
+  item: {
+    campus: any;
+    name: string;
+    maintainableAssetProfile?: { assetType: string } | null;
+  },
+  userId: string,
+) {
+  const office = await this.prisma.office.upsert({
+    where: { name_campus: { name: 'BG Office', campus: item.campus } },
+    update: {},
+    create: { name: 'BG Office', campus: item.campus },
+  });
+
+  const referenceNo = await this.generateWorkRequestReferenceNo();
+
+  const particulars =
+    schedule.basis === MaintenanceBasis.CALENDAR
+      ? `Scheduled: ${schedule.title} — ${item.name}`
+      : `Runtime threshold reached: ${schedule.title} — ${item.name}`;
+
+  const workRequest = await this.prisma.workRequest.create({
+    data: {
+      referenceNo,
+      requestType: RequestType.REGULAR_MAINTENANCE,
+      particulars,
+      campus: item.campus,
+      requestedById: userId,
+      requestingOfficeId: office.id,
+      maintenanceScheduleId: schedule.id,
+      items: {
+        create: [
+          {
+            inventoryItemId: schedule.inventoryItemId,
+            quantity: new Prisma.Decimal(1),
+            description:
+              schedule.basis === MaintenanceBasis.CALENDAR
+                ? 'Scheduled maintenance'
+                : 'Runtime-triggered maintenance',
+          },
+        ],
+      },
+    },
+  });
+
+  await this.autoAssignByAssetType(workRequest.id, item.maintainableAssetProfile?.assetType);
+}
+
+private async autoAssignByAssetType(workRequestId: string, assetType?: string) {
+  if (!assetType) return; // no profile/type — nothing to resolve, leave unassigned
+
+  const config = await this.prisma.assetTypeConfig.findUnique({
+    where: { assetType: assetType as any },
+  });
+  if (!config || !config.isActive) return; // no mapping configured — leave for manual assignment
+
+  const technicians = await this.prisma.user.findMany({
+    where: { positionId: config.positionId, isActive: true },
+  });
+  if (technicians.length === 0) return; // position has no active users — nothing to assign
+
+  await this.prisma.workRequestAssignment.createMany({
+    data: technicians.map((tech) => ({
+      workRequestId,
+      userId: tech.id,
+      role: 'MEMBER' as const,
+    })),
+  });
+}
 
   // Helper: generate reference number for auto-created work requests
   private async generateWorkRequestReferenceNo(): Promise<string> {
@@ -100,7 +188,6 @@ export class MaintenanceSchedulesService {
     return `WR-${year}-${seq}`;
   }
 
-  // ... rest of your methods unchanged ...
   async findAll() {
     return this.prisma.maintenanceSchedule.findMany({
       where: { isActive: true },
@@ -122,12 +209,32 @@ export class MaintenanceSchedulesService {
 
   async complete(id: string, userId: string) {
     const schedule = await this.findOne(id);
+
+    const data: Prisma.MaintenanceScheduleUpdateInput = {
+      lastPerformedAt: new Date(),
+    };
+
+    if (schedule.basis === MaintenanceBasis.CALENDAR) {
+      if (schedule.frequencyDays == null) {
+        throw new BadRequestException(
+          'This CALENDAR schedule has no frequencyDays set — cannot compute next due date.',
+        );
+      }
+      data.nextDueAt = new Date(
+        Date.now() + schedule.frequencyDays * 24 * 60 * 60 * 1000,
+      );
+    } else {
+      if (schedule.frequencyHours == null) {
+        throw new BadRequestException(
+          'This RUNTIME schedule has no frequencyHours set — cannot compute next due threshold.',
+        );
+      }
+      data.nextDueAtHours = schedule.currentRunHours.plus(schedule.frequencyHours);
+    }
+
     const updated = await this.prisma.maintenanceSchedule.update({
       where: { id },
-      data: {
-        lastPerformedAt: new Date(),
-        nextDueAt: new Date(Date.now() + schedule.frequencyDays * 24 * 60 * 60 * 1000),
-      },
+      data,
       include: this.defaultInclude,
     });
 
@@ -135,12 +242,77 @@ export class MaintenanceSchedulesService {
       action: 'COMPLETE',
       entityType: 'MaintenanceSchedule',
       entityId: id,
-      description: `Maintenance "${schedule.title}" completed. Next due at ${updated.nextDueAt}`,
+      description: `Maintenance "${schedule.title}" completed. Next due: ${
+        updated.nextDueAt ?? updated.nextDueAtHours + ' hrs'
+      }`,
       performedById: userId,
     });
 
     return updated;
   }
+
+async recordRunHours(id: string, userId: string, dto: RecordRunHoursDto) {
+  const schedule = await this.findOne(id); // already includes inventoryItem via defaultInclude
+
+  if (schedule.basis !== MaintenanceBasis.RUNTIME) {
+    throw new BadRequestException('Run hours only apply to RUNTIME schedules.');
+  }
+
+  const newReading = new Prisma.Decimal(dto.hours);
+  if (newReading.lessThan(schedule.currentRunHours)) {
+    throw new BadRequestException(
+      `New reading (${dto.hours}) cannot be lower than the last recorded reading (${schedule.currentRunHours}).`,
+    );
+  }
+
+  await this.prisma.runHourReading.create({
+    data: {
+      maintenanceScheduleId: id,
+      hours: newReading,
+      recordedById: userId,
+    },
+  });
+
+  const updated = await this.prisma.maintenanceSchedule.update({
+    where: { id },
+    data: { currentRunHours: newReading },
+    include: this.defaultInclude,
+  });
+
+  await this.auditLogService.log({
+    action: 'RECORD_RUN_HOURS',
+    entityType: 'MaintenanceSchedule',
+    entityId: id,
+    description: `Recorded run hours for "${schedule.title}": ${dto.hours} hrs (was ${schedule.currentRunHours})`,
+    performedById: userId,
+  });
+
+  // Auto-generate a work request the moment this reading crosses the due threshold
+  if (
+    updated.nextDueAtHours != null &&
+    newReading.greaterThanOrEqualTo(updated.nextDueAtHours)
+  ) {
+    const alreadyRequested = await this.prisma.workRequest.findFirst({
+      where: {
+        maintenanceScheduleId: id,
+        status: { notIn: ['COMPLETED', 'CANCELLED'] },
+      },
+    });
+
+    if (!alreadyRequested) {
+      await this.createWorkRequestForSchedule(updated, updated.inventoryItem, userId);
+      await this.auditLogService.log({
+        action: 'AUTO_CREATE_WORK_REQUEST',
+        entityType: 'MaintenanceSchedule',
+        entityId: id,
+        description: `"${updated.title}" reached ${newReading} hrs (threshold ${updated.nextDueAtHours} hrs) — work request auto-generated.`,
+        performedById: userId,
+      });
+    }
+  }
+
+  return this.findOne(id);
+}
 
   async deactivate(id: string, userId: string) {
     await this.findOne(id);

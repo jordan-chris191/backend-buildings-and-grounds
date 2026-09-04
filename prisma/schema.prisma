@@ -54,7 +54,8 @@ model User {
   workRequestAssignments      WorkRequestAssignment[]     @relation("WorkRequestAssignmentUser")
   approvedWorkRequests        WorkRequest[]               @relation("WorkRequestApprovedBy")
   rejectedWorkRequests        WorkRequest[]               @relation("WorkRequestRejectedBy")
-
+  runHourReadingsRecorded RunHourReading[] @relation("RunHourReadingRecordedBy")
+  
   @@index([roleId])
   @@index([positionId])
   @@index([officeId])
@@ -143,6 +144,7 @@ model Position {
   isActive    Boolean  @default(true)
   updatedAt   DateTime @updatedAt
   users       User[]   @relation("PositionUsers")
+  assetTypeConfigs AssetTypeConfig[] @relation("AssetTypeConfigPosition")
 }
 
 model AnnualBudget {
@@ -227,6 +229,7 @@ model InventoryItem {
   maintenanceSchedules  MaintenanceSchedule[] @relation("ItemMaintenanceSchedules")
   stockMovements        StockMovement[]       @relation("ItemStockMovements")
   workRequestItems      WorkRequestItem[]     @relation("InventoryWorkRequestItems")
+  maintainableAssetProfile MaintainableAssetProfile? @relation("InventoryMaintainableProfile")
 
   @@index([categoryId])
   @@index([projectId])
@@ -425,24 +428,93 @@ model WorkRequestAccomplishment {
   workRequest       WorkRequest @relation("WorkRequestAccomplishment", fields: [workRequestId], references: [id], onDelete: Cascade)
 }
 
+model AssetTypeConfig {
+  id         String                @id @default(uuid())
+  assetType  MaintainableAssetType @unique
+  positionId String
+  notes      String?
+  isActive   Boolean               @default(true)
+  createdAt  DateTime              @default(now())
+  updatedAt  DateTime              @updatedAt
+
+  position Position @relation("AssetTypeConfigPosition", fields: [positionId], references: [id])
+}
+
 model MaintenanceSchedule {
-  id              String        @id @default(uuid())
+  id              String            @id @default(uuid())
   title           String
-  frequencyDays   Int
+  basis           MaintenanceBasis  @default(CALENDAR)   // NEW
+
+  frequencyDays   Int?                                   // was required
+  nextDueAt       DateTime?                               // was required
+
+  frequencyHours  Decimal?          @db.Decimal(10, 2)    // NEW
+  currentRunHours Decimal           @default(0) @db.Decimal(10, 2)  // NEW
+  nextDueAtHours  Decimal?          @db.Decimal(10, 2)    // NEW
+
+  notes           String?                                 // NEW
+
   lastPerformedAt DateTime?
-  nextDueAt       DateTime
   isActive        Boolean       @default(true)
   createdAt       DateTime      @default(now())
   inventoryItemId String
   createdById     String
-  createdBy       User          @relation("MaintenanceCreator", fields: [createdById], references: [id])
-  inventoryItem   InventoryItem @relation("ItemMaintenanceSchedules", fields: [inventoryItemId], references: [id], onDelete: Cascade)
-  workRequests    WorkRequest[] @relation("MaintenanceWorkRequests")
+  createdBy       User             @relation("MaintenanceCreator", fields: [createdById], references: [id])
+  inventoryItem   InventoryItem    @relation("ItemMaintenanceSchedules", fields: [inventoryItemId], references: [id], onDelete: Cascade)
+  workRequests    WorkRequest[]    @relation("MaintenanceWorkRequests")
+  runHourReadings RunHourReading[] @relation("ScheduleRunHourReadings")  // NEW
 
   @@index([inventoryItemId])
   @@index([nextDueAt])
   @@index([isActive])
   @@index([isActive, nextDueAt])
+  @@index([basis])                                        // NEW
+}
+
+model MaintainableAssetProfile {
+  id              String                @id @default(uuid())
+  inventoryItemId String                @unique
+  assetType       MaintainableAssetType
+  priority        MaintenancePriority   @default(ROUTINE)
+  notes           String?
+  isActive        Boolean               @default(true)
+  createdAt       DateTime              @default(now())
+  updatedAt       DateTime              @updatedAt
+
+  unitTypeConfigId String?
+
+  inventoryItem  InventoryItem              @relation("InventoryMaintainableProfile", fields: [inventoryItemId], references: [id], onDelete: Cascade)
+  unitTypeConfig MaintenanceUnitTypeConfig? @relation("UnitTypeConfigProfiles", fields: [unitTypeConfigId], references: [id])
+
+  @@index([assetType])
+  @@index([unitTypeConfigId])
+  @@index([priority])
+}
+
+model MaintenanceUnitTypeConfig {
+  id                  String   @id @default(uuid())
+  unitType            String   @unique
+  defaultCooldownDays Int
+  notes               String?
+  isActive            Boolean  @default(true)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  profiles MaintainableAssetProfile[] @relation("UnitTypeConfigProfiles")
+}
+
+model RunHourReading {
+  id                    String   @id @default(uuid())
+  hours                 Decimal  @db.Decimal(10, 2)
+  recordedAt            DateTime @default(now())
+  maintenanceScheduleId String
+  recordedById          String
+
+  maintenanceSchedule MaintenanceSchedule @relation("ScheduleRunHourReadings", fields: [maintenanceScheduleId], references: [id], onDelete: Cascade)
+  recordedBy          User                @relation("RunHourReadingRecordedBy", fields: [recordedById], references: [id])
+
+  @@index([maintenanceScheduleId])
+  @@index([recordedById])
 }
 
 model MaterialEstimate {
@@ -681,4 +753,22 @@ enum ApprovalStatus {
 enum RequestPriority {
   NOT_URGENT
   URGENT
+}
+
+enum MaintainableAssetType {
+  AIRCON
+  GENERATOR
+  PUMP
+  OTHER
+}
+
+enum MaintenanceBasis {
+  CALENDAR   // aircons — driven by frequencyDays
+  RUNTIME    // generators/pumps — driven by running hours
+}
+
+enum MaintenancePriority {
+  ROUTINE
+  IMPORTANT
+  CRITICAL
 }
