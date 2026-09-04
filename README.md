@@ -1,98 +1,165 @@
 <p align="center">
-  <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="Nest Logo" /></a>
+  <a href="https://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="Nest Logo" /></a>
 </p>
 
-[circleci-image]: https://img.shields.io/circleci/build/github/nestjs/nest/master?token=abc123def456
-[circleci-url]: https://circleci.com/gh/nestjs/nest
+# Buildings & Grounds Management System - Backend API
 
-  <p align="center">A progressive <a href="http://nodejs.org" target="_blank">Node.js</a> framework for building efficient and scalable server-side applications.</p>
-    <p align="center">
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/v/@nestjs/core.svg" alt="NPM Version" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/l/@nestjs/core.svg" alt="Package License" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/dm/@nestjs/common.svg" alt="NPM Downloads" /></a>
-<a href="https://circleci.com/gh/nestjs/nest" target="_blank"><img src="https://img.shields.io/circleci/build/github/nestjs/nest/master" alt="CircleCI" /></a>
-<a href="https://discord.gg/G7Qnnhy" target="_blank"><img src="https://img.shields.io/badge/discord-online-brightgreen.svg" alt="Discord"/></a>
-<a href="https://opencollective.com/nest#backer" target="_blank"><img src="https://opencollective.com/nest/backers/badge.svg" alt="Backers on Open Collective" /></a>
-<a href="https://opencollective.com/nest#sponsor" target="_blank"><img src="https://opencollective.com/nest/sponsors/badge.svg" alt="Sponsors on Open Collective" /></a>
-  <a href="https://paypal.me/kamilmysliwiec" target="_blank"><img src="https://img.shields.io/badge/Donate-PayPal-ff3f59.svg" alt="Donate us"/></a>
-    <a href="https://opencollective.com/nest#sponsor"  target="_blank"><img src="https://img.shields.io/badge/Support%20us-Open%20Collective-41B883.svg" alt="Support us"></a>
-  <a href="https://twitter.com/nestframework" target="_blank"><img src="https://img.shields.io/twitter/follow/nestframework.svg?style=social&label=Follow" alt="Follow us on Twitter"></a>
-</p>
-  <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
-  [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
+A comprehensive NestJS backend API for managing buildings and grounds maintenance operations, including work requests, asset management, inventory, stock movements, and maintenance scheduling.
 
-## Description
+## Features
 
-[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
+- **Authentication & Authorization** - JWT-based auth with role-based access control
+- **Work Request Management** - Create, approve, and track maintenance work requests with priority levels
+- **Asset Management** - Track and transfer assets across locations with approval workflows
+- **Inventory Control** - Manage stock inventory with categories and stock movements
+- **Maintenance Scheduling** - Schedule and track maintenance tasks with time-based and run-hours-based intervals
+- **Maintenance Profiles** - Configure default maintenance intervals per asset type
+- **Project Tracking** - Manage maintenance and improvement projects
+- **Budget Management** - Track budgets and financial transactions
+- **Reporting** - Generate reports for various system operations
+- **Notifications** - Real-time notifications for system events
+- **Purchase & Borrow Requests** - Handle procurement and equipment borrowing workflows
+
+## Modules
+
+| Module | Description |
+|--------|-------------|
+| `auth` | Authentication and authorization |
+| `inventory` | Inventory management |
+| `work-requests` | Maintenance work request workflows |
+| `asset-transfers` | Asset transfer approvals and tracking |
+| `stock-movements` | Stock movement tracking |
+| `maintenance-schedules` | Scheduled maintenance tasks |
+| `maintainable-asset-profiles` | Asset maintenance configuration profiles |
+| `asset-type-configs` | Asset type-specific settings |
+| `maintenance-unit-type-configs` | Maintenance unit type configurations |
+| `projects` | Project management |
+| `budget` | Budget tracking and transactions |
+| `purchase-requests` | Purchase request workflows |
+| `borrow-requests` | Equipment borrowing workflows |
+| `notifications` | System notifications |
+| `reports` | Report generation |
+| `persons` | Person/employee management |
+| `offices` | Office/location management |
+| `positions` | Position/role definitions |
+| `categories` | Categorization system |
+| `roles` | Role permissions |
+
+## Tech Stack
+
+- **Framework:** NestJS (Node.js)
+- **ORM:** Prisma
+- **Database:** PostgreSQL
+- **Authentication:** JWT
+- **API Documentation:** Swagger/OpenAPI (via `@nestjs/swagger`)
 
 ## Project setup
 
 ```bash
-$ npm install
+# Install dependencies
+npm install
+
+# Set up environment variables
+cp .env.example .env
+# Edit .env with your database credentials
+
+# Run database migrations
+npx prisma migrate dev
+
+# Generate Prisma client
+npx prisma generate
 ```
 
 ## Compile and run the project
 
 ```bash
 # development
-$ npm run start
+npm run start
 
-# watch mode
-$ npm run start:dev
+# watch mode (with hot reload)
+npm run start:dev
 
 # production mode
-$ npm run start:prod
+npm run start:prod
 ```
 
 ## Run tests
 
 ```bash
 # unit tests
-$ npm run test
+npm run test
 
 # e2e tests
-$ npm run test:e2e
+npm run test:e2e
 
 # test coverage
-$ npm run test:cov
+npm run test:cov
 ```
 
-## Deployment
+## API Documentation
 
-When you're ready to deploy your NestJS application to production, there are some key steps you can take to ensure it runs as efficiently as possible. Check out the [deployment documentation](https://docs.nestjs.com/deployment) for more information.
+When the server is running, access the Swagger API documentation at:
 
-If you are looking for a cloud-based platform to deploy your NestJS application, check out [Mau](https://mau.nestjs.com), our official platform for deploying NestJS applications on AWS. Mau makes deployment straightforward and fast, requiring just a few simple steps:
+```
+http://localhost:3000/api/docs
+```
+
+## Database
+
+### Prisma Commands
 
 ```bash
-$ npm install -g @nestjs/mau
-$ mau deploy
+# Push schema changes to database
+npx prisma db push
+
+# Create a migration
+npx prisma migrate dev
+
+# Apply migrations
+npx prisma migrate deploy
+
+# Open Prisma Studio (database GUI)
+npx prisma studio
 ```
 
-With Mau, you can deploy your application in just a few clicks, allowing you to focus on building features rather than managing infrastructure.
+## Environment Variables
 
-## Resources
+| Variable | Description | Required |
+|----------|-------------|----------|
+| `DATABASE_URL` | PostgreSQL connection string | Yes |
+| `JWT_SECRET` | JWT signing secret | Yes |
+| `JWT_EXPIRATION` | JWT token expiration time | No |
+| `PORT` | Server port (default: 3000) | No |
 
-Check out a few resources that may come in handy when working with NestJS:
+## Project Structure
 
-- Visit the [NestJS Documentation](https://docs.nestjs.com) to learn more about the framework.
-- For questions and support, please visit our [Discord channel](https://discord.gg/G7Qnnhy).
-- To dive deeper and get more hands-on experience, check out our official video [courses](https://courses.nestjs.com/).
-- Deploy your application to AWS with the help of [NestJS Mau](https://mau.nestjs.com) in just a few clicks.
-- Visualize your application graph and interact with the NestJS application in real-time using [NestJS Devtools](https://devtools.nestjs.com).
-- Need help with your project (part-time to full-time)? Check out our official [enterprise support](https://enterprise.nestjs.com).
-- To stay in the loop and get updates, follow us on [X](https://x.com/nestframework) and [LinkedIn](https://linkedin.com/company/nestjs).
-- Looking for a job, or have a job to offer? Check out our official [Jobs board](https://jobs.nestjs.com).
-
-## Support
-
-Nest is an MIT-licensed open source project. It can grow thanks to the sponsors and support by the amazing backers. If you'd like to join them, please [read more here](https://docs.nestjs.com/support).
-
-## Stay in touch
-
-- Author - [Kamil Myśliwiec](https://twitter.com/kammysliwiec)
-- Website - [https://nestjs.com](https://nestjs.com/)
-- Twitter - [@nestframework](https://twitter.com/nestframework)
+```
+src/
+├── app.module.ts           # Root module
+├── main.ts                 # Application entry point
+├── auth/                   # Authentication module
+├── inventory/              # Inventory management
+├── work-requests/          # Work request workflows
+├── asset-transfers/        # Asset transfer module
+├── stock-movements/        # Stock movement tracking
+├── maintenance-schedules/  # Maintenance scheduling
+├── maintainable-asset-profile/  # Asset maintenance profiles
+├── asset-type-configs/      # Asset type configurations
+├── maintenanc-unit-type-configs/ # Maintenance unit configs
+├── projects/               # Project management
+├── budget/                 # Budget management
+├── purchase-requests/      # Purchase workflows
+├── borrow-requests/        # Borrow workflows
+├── notifications/          # Notifications
+├── reports/                # Reporting
+├── persons/                 # Person management
+├── offices/                 # Office management
+├── positions/               # Position definitions
+├── categories/             # Categories
+├── roles/                   # Role permissions
+└── gateway/                 # WebSocket gateway
+```
 
 ## License
 
-Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
+MIT
