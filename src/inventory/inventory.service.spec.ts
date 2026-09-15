@@ -23,6 +23,7 @@ describe('InventoryService inventory integrity', () => {
   };
   const tx: any = {
     inventoryItem: { update: jest.fn(), findUniqueOrThrow: jest.fn() },
+    inventoryStock: { findUniqueOrThrow: jest.fn(), count: jest.fn() },
   };
   const prisma: any = {
     inventoryItem: { findUnique: jest.fn(), update: jest.fn() },
@@ -42,6 +43,10 @@ describe('InventoryService inventory integrity', () => {
       isActive: false,
       quantity: new Prisma.Decimal(0),
     });
+    tx.inventoryStock.findUniqueOrThrow.mockResolvedValue({
+      quantity: new Prisma.Decimal(7),
+    });
+    tx.inventoryStock.count.mockResolvedValue(0);
     ledger.apply.mockResolvedValue({
       inventoryItem: { ...item, quantity: new Prisma.Decimal(0) },
     });
@@ -74,16 +79,10 @@ describe('InventoryService inventory integrity', () => {
     ).rejects.toBeInstanceOf(BadRequestException);
   });
 
-  it('archives positive stock through the ledger then persists zero quantity', async () => {
+  it('archives only after all campus balances are empty', async () => {
     await service.remove('item-1', 'user-1');
 
-    expect(ledger.apply).toHaveBeenCalledWith(
-      tx,
-      expect.objectContaining({
-        quantityChange: new Prisma.Decimal(-7),
-        movementType: StockMovementType.WITHDRAWN,
-      }),
-    );
+    expect(ledger.apply).not.toHaveBeenCalled();
     expect(tx.inventoryItem.update).toHaveBeenCalledWith(
       expect.objectContaining({
         data: { isActive: false },
@@ -92,26 +91,18 @@ describe('InventoryService inventory integrity', () => {
     expect(audit.log).toHaveBeenCalledWith(expect.anything(), tx);
   });
 
-  it('does not archive or audit when the ledger operation fails', async () => {
-    ledger.apply.mockRejectedValueOnce(new Error('movement failed'));
+  it('rejects archive while a campus balance has stock', async () => {
+    tx.inventoryStock.count.mockResolvedValueOnce(1);
 
-    await expect(service.remove('item-1', 'user-1')).rejects.toThrow(
-      'movement failed',
-    );
+    await expect(service.remove('item-1', 'user-1')).rejects.toBeInstanceOf(BadRequestException);
     expect(tx.inventoryItem.update).not.toHaveBeenCalled();
     expect(audit.log).not.toHaveBeenCalled();
   });
 
-  it('disposes positive stock through the ledger and stores zero quantity', async () => {
+  it('disposes only after all campus balances are empty', async () => {
     await service.updateStatus('item-1', ItemStatus.DISPOSED, 'user-1');
 
-    expect(ledger.apply).toHaveBeenCalledWith(
-      tx,
-      expect.objectContaining({
-        quantityChange: new Prisma.Decimal(-7),
-        movementType: StockMovementType.WITHDRAWN,
-      }),
-    );
+    expect(ledger.apply).not.toHaveBeenCalled();
     expect(tx.inventoryItem.update).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({

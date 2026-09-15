@@ -71,10 +71,13 @@ export class AssetTransfersService {
           );
         }
 
-        // Check available quantity
-        if (inventoryItem.quantity.lessThan(quantity)) {
+        const stock = await tx.inventoryStock.findUnique({
+          where: { inventoryItemId_campus: { inventoryItemId: inventoryItem.id, campus: inventoryItem.campus } },
+        });
+        const available = stock ? stock.quantity.minus(stock.reservedQuantity) : new Prisma.Decimal(0);
+        if (available.lessThan(quantity)) {
           throw new BadRequestException(
-            `Insufficient quantity for item ${inventoryItem.id}. Available: ${inventoryItem.quantity}, requested: ${quantity}`,
+            `Insufficient quantity for item ${inventoryItem.id}. Available: ${available}, requested: ${quantity}`,
           );
         }
 
@@ -341,15 +344,20 @@ export class AssetTransfersService {
         }
 
         // ✅ Record the transfer as a stock movement (zero quantity change)
+        const stock = await tx.inventoryStock.findUniqueOrThrow({
+          where: { inventoryItemId_campus: { inventoryItemId: row.inventoryItemId, campus: row.fromCampus } },
+        });
         await tx.stockMovement.create({
           data: {
             movementType: StockMovementType.ADJUSTED,
             quantityChange: new Prisma.Decimal(0),
-            quantityAfter: row.inventoryItem.quantity,
+            quantityAfter: stock.quantity,
             reason: `Item transferred from ${row.fromCampus} to ${row.toCampus}`,
             referenceType: 'AssetTransfer',
             referenceId: batchId,
             inventoryItemId: row.inventoryItemId,
+            inventoryStockId: stock.id,
+            campus: row.fromCampus,
             performedById: userId,
           },
         });

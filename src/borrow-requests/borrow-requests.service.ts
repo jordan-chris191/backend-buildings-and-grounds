@@ -62,15 +62,21 @@ export class BorrowRequestsService {
     if (item.status === ItemStatus.BORROWED) {
       throw new BadRequestException('Item is currently borrowed.');
     }
-    if (item.quantity.toNumber() < dto.quantity) {
+    const stock = await this.prisma.inventoryStock.findUnique({
+      where: { inventoryItemId_campus: { inventoryItemId: item.id, campus: dto.campus } },
+    });
+    const available = stock ? stock.quantity.minus(stock.reservedQuantity) : new Prisma.Decimal(0);
+    if (available.lessThan(dto.quantity)) {
       throw new BadRequestException(
-        `Insufficient stock. Available: ${item.quantity}`,
+        `Insufficient stock. Available: ${available}`,
       );
     }
 
     return this.prisma.borrowRequest.create({
       data: {
         inventoryItemId: dto.inventoryItemId,
+        inventoryStockId: stock?.id,
+        campus: dto.campus,
         requestedById: userId,
         quantity: new Prisma.Decimal(dto.quantity),
         reason: dto.reason,
@@ -150,6 +156,7 @@ export class BorrowRequestsService {
       if (type === TransactionType.ISSUANCE || type === TransactionType.WITHDRAWAL) {
         await this.inventoryLedgerService.apply(tx, {
           inventoryItemId: request.inventoryItemId,
+          campus: request.campus!,
           quantityChange: request.quantity.negated(),
           movementType: StockMovementType.WITHDRAWN,
           reason: `Borrow approved (${type}): ${request.id}`,
@@ -180,6 +187,7 @@ export class BorrowRequestsService {
       } else if (type === TransactionType.RETURN) {
         await this.inventoryLedgerService.apply(tx, {
           inventoryItemId: request.inventoryItemId,
+          campus: request.campus!,
           quantityChange: request.quantity,
           movementType: StockMovementType.RETURNED,
           reason: `Borrow approved as RETURN: ${request.id}`,
@@ -317,6 +325,7 @@ export class BorrowRequestsService {
 
         await this.inventoryLedgerService.apply(tx, {
           inventoryItemId: request.inventoryItemId,
+          campus: request.campus!,
           quantityChange: request.quantity,
           movementType: StockMovementType.RETURNED,
           reason: `Borrow returned: ${request.id}`,

@@ -8,9 +8,9 @@ export class ReportsService {
   async inventorySummary() {
     const [totalItems, totalQuantityAgg, itemsByType] = await Promise.all([
       this.prisma.inventoryItem.count({ where: { isActive: true } }),
-      this.prisma.inventoryItem.aggregate({
+      this.prisma.inventoryStock.aggregate({
         _sum: { quantity: true },
-        where: { isActive: true },
+        where: { isActive: true, inventoryItem: { is: { isActive: true } } },
       }),
       this.prisma.inventoryItem.groupBy({
         by: ['type'],

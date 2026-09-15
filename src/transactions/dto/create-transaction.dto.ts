@@ -6,7 +6,7 @@ import {
   IsDateString,
   Min,
 } from 'class-validator';
-import { TransactionType } from '@prisma/client';
+import { Campus, TransactionType } from '@prisma/client';
 
 export class CreateTransactionDto {
   @IsEnum(TransactionType)
@@ -14,6 +14,9 @@ export class CreateTransactionDto {
 
   @IsString()
   inventoryItemId: string;
+
+  @IsEnum(Campus)
+  campus: Campus;
 
   @IsNumber()
   @Min(0)

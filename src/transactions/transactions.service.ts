@@ -50,6 +50,10 @@ export class TransactionsService {
     });
     if (!item) throw new NotFoundException('Inventory item not found.');
     if (!item.isActive) throw new BadRequestException('Item is archived.');
+    const stock = await this.prisma.inventoryStock.findUnique({
+      where: { inventoryItemId_campus: { inventoryItemId: dto.inventoryItemId, campus: dto.campus } },
+    });
+    if (!stock) throw new BadRequestException('No stock balance exists at this campus.');
 
     const isWithdrawal =
       dto.transactionType === TransactionType.ISSUANCE ||
@@ -73,6 +77,8 @@ export class TransactionsService {
           controlNumber: await this.generateControlNo(tx, dto.transactionType),
           transactionType: dto.transactionType,
           inventoryItemId: dto.inventoryItemId,
+          inventoryStockId: stock.id,
+          campus: dto.campus,
           quantity: this.toDecimal(dto.quantity),
           personId: dto.personId,          // now safe
           custodianId: userId,
@@ -85,6 +91,7 @@ export class TransactionsService {
 
       await this.inventoryLedgerService.apply(tx, {
         inventoryItemId: dto.inventoryItemId,
+        campus: dto.campus,
         quantityChange: this.toDecimal(isWithdrawal ? -dto.quantity : dto.quantity),
         movementType: isWithdrawal
           ? StockMovementType.WITHDRAWN
@@ -180,6 +187,7 @@ export class TransactionsService {
 
       await this.inventoryLedgerService.apply(prismaTx, {
         inventoryItemId: tx.inventoryItemId,
+        campus: tx.campus!,
         quantityChange: tx.quantity,
         movementType: StockMovementType.RETURNED,
         reason: `Return from ${tx.controlNumber}`,

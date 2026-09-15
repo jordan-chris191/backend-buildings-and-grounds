@@ -34,6 +34,7 @@ export class InventoryService {
   private readonly defaultInclude = {
     category: true,
     project: true,
+    inventoryStocks: true,
   };
 
   private toDecimal(value: number): Prisma.Decimal {
@@ -41,7 +42,15 @@ export class InventoryService {
   }
 
   private toResponseItem(item: any) {
-    const quantity = Number(item.quantity);
+    // During the additive migration, old test fixtures/read replicas may not
+    // yet contain balances. Production reads use the balance for this campus.
+    const balance = item.inventoryStocks?.find((stock: any) => stock.campus === item.campus);
+    const quantity = Number(balance?.quantity ?? item.quantity);
+    const inventoryStocks = item.inventoryStocks?.map((stock: any) => {
+      const stockQuantity = Number(stock.quantity);
+      const reservedQuantity = Number(stock.reservedQuantity);
+      return { ...stock, quantity: stockQuantity, reservedQuantity, availableQuantity: stockQuantity - reservedQuantity };
+    }) ?? [];
     const threshold =
       item.minStockLevel != null
         ? Number(item.minStockLevel)
@@ -55,6 +64,10 @@ export class InventoryService {
 
     return {
       ...item,
+      inventoryStocks,
+      quantity,
+      reservedQuantity: Number(balance?.reservedQuantity ?? 0),
+      availableQuantity: quantity - Number(balance?.reservedQuantity ?? 0),
       totalValue,
       isLowStock,
     };
@@ -93,12 +106,20 @@ export class InventoryService {
       });
 
       if (quantity > 0) {
+        await tx.inventoryStock.create({
+          data: { inventoryItemId: item.id, campus: dto.campus, quantity: this.toDecimal(0) },
+        });
         await this.inventoryLedgerService.apply(tx, {
           movementType: StockMovementType.RECEIVED,
           quantityChange: this.toDecimal(quantity),
           reason: 'Initial stock',
           inventoryItemId: item.id,
+          campus: dto.campus,
           performedById: userId,
+        });
+      } else {
+        await tx.inventoryStock.create({
+          data: { inventoryItemId: item.id, campus: dto.campus, quantity: this.toDecimal(0) },
         });
       }
 
@@ -146,21 +167,16 @@ export class InventoryService {
       ...(status && { status }),
     };
 
-    if (lowStock !== undefined) {
-      // Global threshold used here; if you later add per-item thresholds,
-      // you can filter in-memory or use a raw query.
-      where.quantity = {
-        lte: new Prisma.Decimal(DEFAULT_LOW_STOCK_THRESHOLD),
-      };
-    }
-
     const items = await this.prisma.inventoryItem.findMany({
       where,
       include: this.defaultInclude,
       orderBy: { createdAt: 'desc' },
     });
 
-    return items.map((item) => this.toResponseItem(item));
+    const response = items.map((item) => this.toResponseItem(item));
+    return lowStock === undefined
+      ? response
+      : response.filter((item) => item.isLowStock === lowStock);
   }
 
   // ---------- FIND ONE ----------
@@ -252,8 +268,9 @@ export class InventoryService {
     }
 
     const updated = await this.prisma.$transaction(async (tx) => {
-      const { inventoryItem } = await this.inventoryLedgerService.apply(tx, {
+      await this.inventoryLedgerService.apply(tx, {
         inventoryItemId: id,
+        campus: item.campus,
         quantityChange: this.toDecimal(change),
         movementType: StockMovementType.ADJUSTED,
         reason,
@@ -269,7 +286,7 @@ export class InventoryService {
       }, tx);
 
       return tx.inventoryItem.findUniqueOrThrow({
-        where: { id: inventoryItem.id },
+        where: { id },
         include: this.defaultInclude,
       });
     });
@@ -295,14 +312,11 @@ export class InventoryService {
     }
 
     await this.prisma.$transaction(async (tx) => {
-      if (!item.quantity.isZero()) {
-        await this.inventoryLedgerService.apply(tx, {
-          inventoryItemId: id,
-          quantityChange: item.quantity.negated(),
-          movementType: StockMovementType.WITHDRAWN,
-          reason: 'Item archived',
-          performedById,
-        });
+      const nonEmptyBalances = await tx.inventoryStock.count({
+        where: { inventoryItemId: id, OR: [{ quantity: { gt: 0 } }, { reservedQuantity: { gt: 0 } }] },
+      });
+      if (nonEmptyBalances > 0) {
+        throw new BadRequestException('All campus balances must be zero and unreserved before archival.');
       }
 
       await tx.inventoryItem.update({
@@ -328,14 +342,13 @@ export class InventoryService {
     const item = await this.findOne(id);
 
     const rawUpdated = await this.prisma.$transaction(async (tx) => {
-      if (status === ItemStatus.DISPOSED && !item.quantity.isZero()) {
-        await this.inventoryLedgerService.apply(tx, {
-          inventoryItemId: id,
-          quantityChange: item.quantity.negated(),
-          movementType: StockMovementType.WITHDRAWN,
-          reason: `Item disposed (status changed to ${status})`,
-          performedById,
+      if (status === ItemStatus.DISPOSED) {
+        const nonEmptyBalances = await tx.inventoryStock.count({
+          where: { inventoryItemId: id, OR: [{ quantity: { gt: 0 } }, { reservedQuantity: { gt: 0 } }] },
         });
+        if (nonEmptyBalances > 0) {
+          throw new BadRequestException('All campus balances must be zero and unreserved before disposal.');
+        }
       }
 
       const updated = await tx.inventoryItem.update({

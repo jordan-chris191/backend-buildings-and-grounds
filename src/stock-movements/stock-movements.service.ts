@@ -72,8 +72,11 @@ export class StockMovementsService {
     }
 
     return this.prisma.$transaction(async (tx) => {
-      const { inventoryItem, stockMovement } = await this.inventoryLedgerService.apply(tx, {
+      const item = await tx.inventoryItem.findUnique({ where: { id: dto.inventoryItemId } });
+      if (!item) throw new NotFoundException('Inventory item not found.');
+      const { stockMovement } = await this.inventoryLedgerService.apply(tx, {
         inventoryItemId: dto.inventoryItemId,
+        campus: item.campus,
         quantityChange: this.toDecimal(dto.quantityChange),
         movementType: dto.movementType,
         reason: dto.reason,
@@ -86,7 +89,7 @@ export class StockMovementsService {
         action: 'CREATE',
         entityType: 'StockMovement',
         entityId: stockMovement.id,
-        description: `${dto.movementType} of ${dto.quantityChange} ${inventoryItem.unit} of ${inventoryItem.name}`,
+        description: `${dto.movementType} of ${dto.quantityChange} ${item.unit} of ${item.name}`,
         performedById: userId,
       }, tx);
 

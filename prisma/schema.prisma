@@ -52,8 +52,8 @@ model User {
   workRequestAssignments      WorkRequestAssignment[]     @relation("WorkRequestAssignmentUser")
   approvedWorkRequests        WorkRequest[]               @relation("WorkRequestApprovedBy")
   rejectedWorkRequests        WorkRequest[]               @relation("WorkRequestRejectedBy")
-  runHourReadingsRecorded RunHourReading[] @relation("RunHourReadingRecordedBy")
-  
+  runHourReadingsRecorded     RunHourReading[]            @relation("RunHourReadingRecordedBy")
+
   @@index([roleId])
   @@index([positionId])
   @@index([officeId])
@@ -101,15 +101,15 @@ model Notification {
 }
 
 model Office {
-  id               String            @id @default(uuid())
-  name             String
-  campus           Campus
-  description      String?
-  isActive         Boolean           @default(true)
-  createdAt        DateTime          @default(now())
-  updatedAt        DateTime          @updatedAt
-  users            User[]            @relation("UserOffice")
-  workRequests     WorkRequest[]     @relation("OfficeWorkRequests")
+  id           String        @id @default(uuid())
+  name         String
+  campus       Campus
+  description  String?
+  isActive     Boolean       @default(true)
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  users        User[]        @relation("UserOffice")
+  workRequests WorkRequest[] @relation("OfficeWorkRequests")
 
   @@unique([name, campus])
   @@index([campus])
@@ -134,63 +134,66 @@ model Person {
 }
 
 model Position {
-  id          String   @id @default(uuid())
-  name        String   @unique
-  description String?
-  createdAt   DateTime @default(now())
-  isActive    Boolean  @default(true)
-  updatedAt   DateTime @updatedAt
-  users       User[]   @relation("PositionUsers")
+  id               String            @id @default(uuid())
+  name             String            @unique
+  description      String?
+  createdAt        DateTime          @default(now())
+  isActive         Boolean           @default(true)
+  updatedAt        DateTime          @updatedAt
+  users            User[]            @relation("PositionUsers")
   assetTypeConfigs AssetTypeConfig[] @relation("AssetTypeConfigPosition")
 }
 
 model Project {
-  id                String             @id @default(uuid())
+  id                String          @id @default(uuid())
   name              String
   description       String?
   startDate         DateTime?
   endDate           DateTime?
-  status            ProjectStatus      @default(ONGOING)
-  createdAt         DateTime           @default(now())
-  estimateControlNo String?            @unique
+  status            ProjectStatus   @default(ONGOING)
+  createdAt         DateTime        @default(now())
+  estimateControlNo String?         @unique
   campus            Campus
   type              ProjectType
-  isActive          Boolean            @default(true)
-  updatedAt         DateTime           @updatedAt
-  items             InventoryItem[]    @relation("ProjectInventory")
+  isActive          Boolean         @default(true)
+  updatedAt         DateTime        @updatedAt
+  items             InventoryItem[] @relation("ProjectInventory")
 
   @@index([campus])
   @@index([isActive])
 }
 
 model InventoryItem {
-  id                      String     @id @default(uuid())
-  name                    String
-  type                    ItemType
-  description             String?
-  quantity                Decimal    @default(1) @db.Decimal(15, 4)
-  location                String?
-  createdAt               DateTime   @default(now())
-  updatedAt               DateTime   @updatedAt
-  projectId               String?
-  propertyNumber          String?    @unique
-  serialNumber            String?    @unique
-  acquisitionDate         DateTime?
-  unit                    String?
-  unitCost                Decimal?   @db.Decimal(19, 4)
-  isActive                Boolean    @default(true)
-  categoryId              String?
-  campus                  Campus
-  status                  ItemStatus @default(GOOD_CONDITION)
+  id              String     @id @default(uuid())
+  name            String
+  type            ItemType
+  description     String?
+  /// @deprecated Compatibility snapshot retained for the InventoryStock backfill.
+  /// Live availability is held by InventoryStock.quantity.
+  quantity        Decimal    @default(1) @db.Decimal(15, 4)
+  location        String?
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+  projectId       String?
+  propertyNumber  String?    @unique
+  serialNumber    String?    @unique
+  acquisitionDate DateTime?
+  unit            String?
+  unitCost        Decimal?   @db.Decimal(19, 4)
+  isActive        Boolean    @default(true)
+  categoryId      String?
+  campus          Campus
+  status          ItemStatus @default(GOOD_CONDITION)
 
-  transfers             AssetTransfer[]       @relation("ItemTransfers")
-  borrowRequests        BorrowRequest[]       @relation("BorrowRequests")
-  category              ItemCategory?         @relation("CategoryInventoryItems", fields: [categoryId], references: [id])
-  project               Project?              @relation("ProjectInventory", fields: [projectId], references: [id])
-  transactions          ItemTransaction[]     @relation("InventoryTransactions")
-  maintenanceSchedules  MaintenanceSchedule[] @relation("ItemMaintenanceSchedules")
-  stockMovements        StockMovement[]       @relation("ItemStockMovements")
-  workRequestItems      WorkRequestItem[]     @relation("InventoryWorkRequestItems")
+  transfers                AssetTransfer[]           @relation("ItemTransfers")
+  borrowRequests           BorrowRequest[]           @relation("BorrowRequests")
+  category                 ItemCategory?             @relation("CategoryInventoryItems", fields: [categoryId], references: [id])
+  project                  Project?                  @relation("ProjectInventory", fields: [projectId], references: [id])
+  transactions             ItemTransaction[]         @relation("InventoryTransactions")
+  maintenanceSchedules     MaintenanceSchedule[]     @relation("ItemMaintenanceSchedules")
+  stockMovements           StockMovement[]           @relation("ItemStockMovements")
+  inventoryStocks          InventoryStock[]
+  workRequestItems         WorkRequestItem[]         @relation("InventoryWorkRequestItems")
   maintainableAssetProfile MaintainableAssetProfile? @relation("InventoryMaintainableProfile")
 
   @@index([categoryId])
@@ -212,43 +215,73 @@ model ItemCategory {
 }
 
 model StockMovement {
-  id                String            @id @default(uuid())
-  quantityChange    Decimal           @db.Decimal(15, 4)
-  quantityAfter     Decimal           @db.Decimal(15, 4)
-  reason            String?
-  referenceType     String?
-  referenceId       String?
-  inventoryItemId   String
-  performedById     String
-  createdAt         DateTime          @default(now())
-  movementType      StockMovementType
-  inventoryItem     InventoryItem     @relation("ItemStockMovements", fields: [inventoryItemId], references: [id])
-  performedBy       User              @relation("StockMovementPerformer", fields: [performedById], references: [id])
+  id               String            @id @default(uuid())
+  quantityChange   Decimal           @db.Decimal(15, 4)
+  quantityAfter    Decimal           @db.Decimal(15, 4)
+  reason           String?
+  referenceType    String?
+  referenceId      String?
+  inventoryItemId  String
+  inventoryStockId String?
+  campus           Campus?
+  performedById    String
+  createdAt        DateTime          @default(now())
+  movementType     StockMovementType
+  inventoryItem    InventoryItem     @relation("ItemStockMovements", fields: [inventoryItemId], references: [id])
+  inventoryStock   InventoryStock?   @relation(fields: [inventoryStockId], references: [id])
+  performedBy      User              @relation("StockMovementPerformer", fields: [performedById], references: [id])
 
   @@index([inventoryItemId])
+  @@index([inventoryStockId])
+  @@index([campus])
   @@index([createdAt])
 }
 
+model InventoryStock {
+  id               String   @id @default(uuid())
+  inventoryItemId  String
+  campus           Campus
+  quantity         Decimal  @default(0) @db.Decimal(15, 4)
+  reservedQuantity Decimal  @default(0) @db.Decimal(15, 4)
+  isActive         Boolean  @default(true)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  inventoryItem  InventoryItem     @relation(fields: [inventoryItemId], references: [id], onDelete: Cascade)
+  stockMovements StockMovement[]
+  transactions   ItemTransaction[]
+  borrowRequests BorrowRequest[]
+
+  @@unique([inventoryItemId, campus])
+  @@index([campus])
+  @@index([isActive])
+}
+
 model ItemTransaction {
-  id              String          @id @default(uuid())
-  controlNumber   String          @unique
-  transactionType TransactionType
-  inventoryItemId String
-  quantity        Decimal         @db.Decimal(15, 4)
-  personId        String?
-  custodianId     String
-  transactionDate DateTime        @default(now())
-  dueDate         DateTime?
-  returnedAt      DateTime?
-  notes           String?
-  createdAt       DateTime        @default(now())
-  updatedAt       DateTime        @updatedAt
-  borrowRequest   BorrowRequest?  @relation("BorrowTransaction")
-  custodian       User            @relation("TransactionCustodian", fields: [custodianId], references: [id])
-  inventoryItem   InventoryItem   @relation("InventoryTransactions", fields: [inventoryItemId], references: [id])
-  person          Person?         @relation("PersonTransactions", fields: [personId], references: [id])
+  id               String          @id @default(uuid())
+  controlNumber    String          @unique
+  transactionType  TransactionType
+  inventoryItemId  String
+  inventoryStockId String?
+  campus           Campus?
+  quantity         Decimal         @db.Decimal(15, 4)
+  personId         String?
+  custodianId      String
+  transactionDate  DateTime        @default(now())
+  dueDate          DateTime?
+  returnedAt       DateTime?
+  notes            String?
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+  borrowRequest    BorrowRequest?  @relation("BorrowTransaction")
+  custodian        User            @relation("TransactionCustodian", fields: [custodianId], references: [id])
+  inventoryItem    InventoryItem   @relation("InventoryTransactions", fields: [inventoryItemId], references: [id])
+  inventoryStock   InventoryStock? @relation(fields: [inventoryStockId], references: [id])
+  person           Person?         @relation("PersonTransactions", fields: [personId], references: [id])
 
   @@index([inventoryItemId])
+  @@index([inventoryStockId])
+  @@index([campus])
   @@index([personId])
   @@index([custodianId])
   @@index([transactionType])
@@ -399,36 +432,36 @@ model AssetTypeConfig {
 }
 
 model MaintenanceSchedule {
-  id              String            @id @default(uuid())
-  title           String
-  basis           MaintenanceBasis  @default(CALENDAR)   // NEW
+  id    String           @id @default(uuid())
+  title String
+  basis MaintenanceBasis @default(CALENDAR) // NEW
 
-  frequencyDays   Int?                                   // was required
-  nextDueAt       DateTime?                               // was required
+  frequencyDays Int? // was required
+  nextDueAt     DateTime? // was required
 
-  frequencyHours  Decimal?          @db.Decimal(10, 2)    // NEW
-  currentRunHours Decimal           @default(0) @db.Decimal(10, 2)  // NEW
-  nextDueAtHours  Decimal?          @db.Decimal(10, 2)    // NEW
+  frequencyHours  Decimal? @db.Decimal(10, 2) // NEW
+  currentRunHours Decimal  @default(0) @db.Decimal(10, 2) // NEW
+  nextDueAtHours  Decimal? @db.Decimal(10, 2) // NEW
 
-  notes           String?                                 // NEW
+  notes String? // NEW
 
   lastPerformedAt DateTime?
-  isActive        Boolean       @default(true)
-  createdAt       DateTime      @default(now())
+  isActive        Boolean          @default(true)
+  createdAt       DateTime         @default(now())
   inventoryItemId String
   createdById     String
   createdBy       User             @relation("MaintenanceCreator", fields: [createdById], references: [id])
   inventoryItem   InventoryItem    @relation("ItemMaintenanceSchedules", fields: [inventoryItemId], references: [id], onDelete: Cascade)
   workRequests    WorkRequest[]    @relation("MaintenanceWorkRequests")
-  runHourReadings RunHourReading[] @relation("ScheduleRunHourReadings")  // NEW
+  runHourReadings RunHourReading[] @relation("ScheduleRunHourReadings") // NEW
+  // The PostgreSQL partial unique index in the maintenance-schedule migration
+  // enforces one active schedule for each inventory item and basis.
 
   @@index([inventoryItemId])
   @@index([nextDueAt])
   @@index([isActive])
   @@index([isActive, nextDueAt])
-  @@index([basis])                                        // NEW
-  // The PostgreSQL partial unique index in the maintenance-schedule migration
-  // enforces one active schedule for each inventory item and basis.
+  @@index([basis]) // NEW
 }
 
 model MaintainableAssetProfile {
@@ -504,28 +537,33 @@ model SequenceCounter {
 }
 
 model BorrowRequest {
-  id              String              @id @default(uuid())
-  inventoryItemId String
-  requestedById   String
-  status          BorrowRequestStatus @default(PENDING)
-  quantity        Decimal             @db.Decimal(15, 4)
-  reason          String?
-  approvedById    String?
-  approvedAt      DateTime?
-  rejectedAt      DateTime?
-  returnedAt      DateTime?
-  transactionId   String?             @unique
-  createdAt       DateTime            @default(now())
-  updatedAt       DateTime            @updatedAt
-  decisionNotes   String?
-  dueDate         DateTime?
-  approvedBy      User?               @relation("BorrowApprover", fields: [approvedById], references: [id])
-  inventoryItem   InventoryItem       @relation("BorrowRequests", fields: [inventoryItemId], references: [id])
-  requestedBy     User                @relation("BorrowRequester", fields: [requestedById], references: [id])
-  transaction     ItemTransaction?    @relation("BorrowTransaction", fields: [transactionId], references: [id])
+  id               String              @id @default(uuid())
+  inventoryItemId  String
+  inventoryStockId String?
+  campus           Campus?
+  requestedById    String
+  status           BorrowRequestStatus @default(PENDING)
+  quantity         Decimal             @db.Decimal(15, 4)
+  reason           String?
+  approvedById     String?
+  approvedAt       DateTime?
+  rejectedAt       DateTime?
+  returnedAt       DateTime?
+  transactionId    String?             @unique
+  createdAt        DateTime            @default(now())
+  updatedAt        DateTime            @updatedAt
+  decisionNotes    String?
+  dueDate          DateTime?
+  approvedBy       User?               @relation("BorrowApprover", fields: [approvedById], references: [id])
+  inventoryItem    InventoryItem       @relation("BorrowRequests", fields: [inventoryItemId], references: [id])
+  inventoryStock   InventoryStock?     @relation(fields: [inventoryStockId], references: [id])
+  requestedBy      User                @relation("BorrowRequester", fields: [requestedById], references: [id])
+  transaction      ItemTransaction?    @relation("BorrowTransaction", fields: [transactionId], references: [id])
 
   @@index([status])
   @@index([inventoryItemId])
+  @@index([inventoryStockId])
+  @@index([campus])
 }
 
 enum PersonType {
@@ -652,8 +690,8 @@ enum MaintainableAssetType {
 }
 
 enum MaintenanceBasis {
-  CALENDAR   // aircons — driven by frequencyDays
-  RUNTIME    // generators/pumps — driven by running hours
+  CALENDAR // aircons — driven by frequencyDays
+  RUNTIME // generators/pumps — driven by running hours
 }
 
 enum MaintenancePriority {
