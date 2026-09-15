@@ -1,5 +1,9 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { BadRequestException, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  NotFoundException,
+} from '@nestjs/common';
 import { MaintenanceSchedulesService } from './maintenance-schedules.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditLogService } from '../audit-log/audit-log.service';
@@ -11,6 +15,7 @@ const mockPrismaService = {
   },
   maintenanceSchedule: {
     create: jest.fn(),
+    findFirst: jest.fn(),
     findMany: jest.fn(),
     findUnique: jest.fn(),
     update: jest.fn(),
@@ -57,7 +62,9 @@ describe('MaintenanceSchedulesService', () => {
       ],
     }).compile();
 
-    service = module.get<MaintenanceSchedulesService>(MaintenanceSchedulesService);
+    service = module.get<MaintenanceSchedulesService>(
+      MaintenanceSchedulesService,
+    );
   });
 
   it('should be defined', () => {
@@ -104,9 +111,16 @@ describe('MaintenanceSchedulesService', () => {
     };
 
     beforeEach(() => {
-      mockPrismaService.inventoryItem.findUnique.mockResolvedValue(mockInventoryItem);
-      mockPrismaService.maintenanceSchedule.create.mockResolvedValue(mockSchedule);
-      mockPrismaService.maintenanceSchedule.findUnique.mockResolvedValue(mockSchedule);
+      mockPrismaService.inventoryItem.findUnique.mockResolvedValue(
+        mockInventoryItem,
+      );
+      mockPrismaService.maintenanceSchedule.create.mockResolvedValue(
+        mockSchedule,
+      );
+      mockPrismaService.maintenanceSchedule.findFirst.mockResolvedValue(null);
+      mockPrismaService.maintenanceSchedule.findUnique.mockResolvedValue(
+        mockSchedule,
+      );
       mockPrismaService.office.upsert.mockResolvedValue({ id: 'office-1' });
       mockPrismaService.sequenceCounter.upsert.mockResolvedValue({ count: 1 });
       mockPrismaService.workRequest.create.mockResolvedValue({ id: 'wr-1' });
@@ -127,7 +141,9 @@ describe('MaintenanceSchedulesService', () => {
 
       expect(mockPrismaService.inventoryItem.findUnique).toHaveBeenCalledWith({
         where: { id: inventoryItemId },
-        include: { maintainableAssetProfile: { include: { unitTypeConfig: true } } },
+        include: {
+          maintainableAssetProfile: { include: { unitTypeConfig: true } },
+        },
       });
       expect(mockPrismaService.maintenanceSchedule.create).toHaveBeenCalled();
       expect(mockAuditLogService.log).toHaveBeenCalledWith(
@@ -150,8 +166,12 @@ describe('MaintenanceSchedulesService', () => {
         nextDueAt: '2024-12-01T00:00:00Z',
       };
 
-      await expect(service.create(userId, dto)).rejects.toThrow(BadRequestException);
-      await expect(service.create(userId, dto)).rejects.toThrow('Inventory item not found.');
+      await expect(service.create(userId, dto)).rejects.toThrow(
+        BadRequestException,
+      );
+      await expect(service.create(userId, dto)).rejects.toThrow(
+        'Inventory item not found.',
+      );
     });
 
     it('should throw BadRequestException if item has no maintainable profile', async () => {
@@ -168,7 +188,9 @@ describe('MaintenanceSchedulesService', () => {
         nextDueAt: '2024-12-01T00:00:00Z',
       };
 
-      await expect(service.create(userId, dto)).rejects.toThrow(BadRequestException);
+      await expect(service.create(userId, dto)).rejects.toThrow(
+        BadRequestException,
+      );
       await expect(service.create(userId, dto)).rejects.toThrow(
         'no maintainable-asset profile',
       );
@@ -180,7 +202,11 @@ describe('MaintenanceSchedulesService', () => {
         ...mockInventoryItem,
         maintainableAssetProfile: {
           ...mockProfile,
-          unitTypeConfig: { id: 'utc-1', name: 'Engine', defaultCooldownDays: null },
+          unitTypeConfig: {
+            id: 'utc-1',
+            name: 'Engine',
+            defaultCooldownDays: null,
+          },
         },
       });
 
@@ -191,8 +217,12 @@ describe('MaintenanceSchedulesService', () => {
         nextDueAt: '2024-12-01T00:00:00Z',
       };
 
-      await expect(service.create(userId, dto)).rejects.toThrow(BadRequestException);
-      await expect(service.create(userId, dto)).rejects.toThrow('frequencyDays is required');
+      await expect(service.create(userId, dto)).rejects.toThrow(
+        BadRequestException,
+      );
+      await expect(service.create(userId, dto)).rejects.toThrow(
+        'frequencyDays is required',
+      );
     });
 
     it('should throw BadRequestException if CALENDAR schedule missing nextDueAt', async () => {
@@ -203,8 +233,12 @@ describe('MaintenanceSchedulesService', () => {
         frequencyDays: 30,
       };
 
-      await expect(service.create(userId, dto)).rejects.toThrow(BadRequestException);
-      await expect(service.create(userId, dto)).rejects.toThrow('nextDueAt is required');
+      await expect(service.create(userId, dto)).rejects.toThrow(
+        BadRequestException,
+      );
+      await expect(service.create(userId, dto)).rejects.toThrow(
+        'nextDueAt is required',
+      );
     });
 
     it('should create a RUNTIME-based maintenance schedule', async () => {
@@ -215,8 +249,12 @@ describe('MaintenanceSchedulesService', () => {
         nextDueAtHours: new Prisma.Decimal(500),
       };
 
-      mockPrismaService.maintenanceSchedule.create.mockResolvedValue(runtimeSchedule);
-      mockPrismaService.maintenanceSchedule.findUnique.mockResolvedValue(runtimeSchedule);
+      mockPrismaService.maintenanceSchedule.create.mockResolvedValue(
+        runtimeSchedule,
+      );
+      mockPrismaService.maintenanceSchedule.findUnique.mockResolvedValue(
+        runtimeSchedule,
+      );
 
       const dto = {
         title: 'Filter Replacement',
@@ -238,6 +276,133 @@ describe('MaintenanceSchedulesService', () => {
       expect(result.basis).toBe(MaintenanceBasis.RUNTIME);
     });
 
+    it('should allow one active CALENDAR and one active RUNTIME schedule for an item', async () => {
+      const runtimeSchedule = {
+        ...mockSchedule,
+        id: 'schedule-2',
+        basis: MaintenanceBasis.RUNTIME,
+        frequencyHours: new Prisma.Decimal(500),
+        nextDueAtHours: new Prisma.Decimal(500),
+      };
+      mockPrismaService.maintenanceSchedule.create.mockResolvedValue(
+        runtimeSchedule,
+      );
+      mockPrismaService.maintenanceSchedule.findUnique.mockResolvedValue(
+        runtimeSchedule,
+      );
+
+      await service.create(userId, {
+        title: 'Runtime inspection',
+        basis: MaintenanceBasis.RUNTIME,
+        inventoryItemId,
+        frequencyHours: 500,
+      });
+
+      expect(
+        mockPrismaService.maintenanceSchedule.findFirst,
+      ).toHaveBeenCalledWith({
+        where: {
+          inventoryItemId,
+          basis: MaintenanceBasis.RUNTIME,
+          isActive: true,
+        },
+      });
+      expect(mockPrismaService.maintenanceSchedule.create).toHaveBeenCalled();
+    });
+
+    it('should reject a duplicate active schedule with the same basis', async () => {
+      mockPrismaService.maintenanceSchedule.findFirst.mockResolvedValue({
+        id: 'existing-calendar-schedule',
+      });
+
+      await expect(
+        service.create(userId, {
+          title: 'Oil Change',
+          basis: MaintenanceBasis.CALENDAR,
+          inventoryItemId,
+          frequencyDays: 30,
+          nextDueAt: '2024-12-01T00:00:00Z',
+        }),
+      ).rejects.toThrow(ConflictException);
+      expect(
+        mockPrismaService.maintenanceSchedule.create,
+      ).not.toHaveBeenCalled();
+    });
+
+    it('should translate a concurrent unique-constraint collision into ConflictException', async () => {
+      mockPrismaService.maintenanceSchedule.create.mockRejectedValue({
+        code: 'P2002',
+        meta: {
+          target: 'MaintenanceSchedule_active_inventoryItemId_basis_key',
+        },
+      });
+
+      await expect(
+        service.create(userId, {
+          title: 'Oil Change',
+          basis: MaintenanceBasis.CALENDAR,
+          inventoryItemId,
+          frequencyDays: 30,
+          nextDueAt: '2024-12-01T00:00:00Z',
+        }),
+      ).rejects.toThrow(ConflictException);
+    });
+
+    it('should translate the Prisma 6 field-target form of the active-schedule collision', async () => {
+      mockPrismaService.maintenanceSchedule.create.mockRejectedValue({
+        code: 'P2002',
+        meta: { target: ['inventoryItemId', 'basis'] },
+      });
+
+      await expect(
+        service.create(userId, {
+          title: 'Oil Change',
+          basis: MaintenanceBasis.CALENDAR,
+          inventoryItemId,
+          frequencyDays: 30,
+          nextDueAt: '2024-12-01T00:00:00Z',
+        }),
+      ).rejects.toThrow(ConflictException);
+    });
+
+    it('should not misreport an unrelated unique-constraint collision as a duplicate schedule', async () => {
+      const error = {
+        code: 'P2002',
+        meta: { target: 'SomeOther_unique_key' },
+      };
+      mockPrismaService.maintenanceSchedule.create.mockRejectedValue(error);
+
+      await expect(
+        service.create(userId, {
+          title: 'Oil Change',
+          basis: MaintenanceBasis.CALENDAR,
+          inventoryItemId,
+          frequencyDays: 30,
+          nextDueAt: '2024-12-01T00:00:00Z',
+        }),
+      ).rejects.toBe(error);
+    });
+
+    it('should reject schedule creation when the maintainable profile is inactive', async () => {
+      mockPrismaService.inventoryItem.findUnique.mockResolvedValue({
+        ...mockInventoryItem,
+        maintainableAssetProfile: { ...mockProfile, isActive: false },
+      });
+
+      await expect(
+        service.create(userId, {
+          title: 'Oil Change',
+          basis: MaintenanceBasis.CALENDAR,
+          inventoryItemId,
+          frequencyDays: 30,
+          nextDueAt: '2024-12-01T00:00:00Z',
+        }),
+      ).rejects.toThrow('inactive maintainable-asset profile');
+      expect(
+        mockPrismaService.maintenanceSchedule.create,
+      ).not.toHaveBeenCalled();
+    });
+
     it('should throw BadRequestException if RUNTIME schedule missing frequencyHours', async () => {
       const dto = {
         title: 'Filter Replacement',
@@ -245,8 +410,12 @@ describe('MaintenanceSchedulesService', () => {
         inventoryItemId,
       };
 
-      await expect(service.create(userId, dto)).rejects.toThrow(BadRequestException);
-      await expect(service.create(userId, dto)).rejects.toThrow('frequencyHours is required');
+      await expect(service.create(userId, dto)).rejects.toThrow(
+        BadRequestException,
+      );
+      await expect(service.create(userId, dto)).rejects.toThrow(
+        'frequencyHours is required',
+      );
     });
   });
 
@@ -257,11 +426,15 @@ describe('MaintenanceSchedulesService', () => {
         { id: 'schedule-2', title: 'Schedule 2', isActive: true },
       ];
 
-      mockPrismaService.maintenanceSchedule.findMany.mockResolvedValue(mockSchedules);
+      mockPrismaService.maintenanceSchedule.findMany.mockResolvedValue(
+        mockSchedules,
+      );
 
       const result = await service.findAll();
 
-      expect(mockPrismaService.maintenanceSchedule.findMany).toHaveBeenCalledWith({
+      expect(
+        mockPrismaService.maintenanceSchedule.findMany,
+      ).toHaveBeenCalledWith({
         where: { isActive: true },
         include: expect.any(Object),
         orderBy: { nextDueAt: 'asc' },
@@ -273,7 +446,9 @@ describe('MaintenanceSchedulesService', () => {
   describe('findOne', () => {
     it('should return a maintenance schedule by id', async () => {
       const mockSchedule = { id: 'schedule-1', title: 'Test Schedule' };
-      mockPrismaService.maintenanceSchedule.findUnique.mockResolvedValue(mockSchedule);
+      mockPrismaService.maintenanceSchedule.findUnique.mockResolvedValue(
+        mockSchedule,
+      );
 
       const result = await service.findOne('schedule-1');
 
@@ -283,7 +458,9 @@ describe('MaintenanceSchedulesService', () => {
     it('should throw NotFoundException if schedule not found', async () => {
       mockPrismaService.maintenanceSchedule.findUnique.mockResolvedValue(null);
 
-      await expect(service.findOne('non-existent')).rejects.toThrow(NotFoundException);
+      await expect(service.findOne('non-existent')).rejects.toThrow(
+        NotFoundException,
+      );
       await expect(service.findOne('non-existent')).rejects.toThrow(
         'Maintenance schedule not found.',
       );
@@ -309,19 +486,25 @@ describe('MaintenanceSchedulesService', () => {
         nextDueAt: expect.any(Date),
       };
 
-      mockPrismaService.maintenanceSchedule.findUnique.mockResolvedValue(mockSchedule);
-      mockPrismaService.maintenanceSchedule.update.mockResolvedValue(updatedSchedule);
+      mockPrismaService.maintenanceSchedule.findUnique.mockResolvedValue(
+        mockSchedule,
+      );
+      mockPrismaService.maintenanceSchedule.update.mockResolvedValue(
+        updatedSchedule,
+      );
 
       const result = await service.complete('schedule-1', userId);
 
-      expect(mockPrismaService.maintenanceSchedule.update).toHaveBeenCalledWith({
-        where: { id: 'schedule-1' },
-        data: expect.objectContaining({
-          lastPerformedAt: expect.any(Date),
-          nextDueAt: expect.any(Date),
-        }),
-        include: expect.any(Object),
-      });
+      expect(mockPrismaService.maintenanceSchedule.update).toHaveBeenCalledWith(
+        {
+          where: { id: 'schedule-1' },
+          data: expect.objectContaining({
+            lastPerformedAt: expect.any(Date),
+            nextDueAt: expect.any(Date),
+          }),
+          include: expect.any(Object),
+        },
+      );
       expect(mockAuditLogService.log).toHaveBeenCalledWith(
         expect.objectContaining({ action: 'COMPLETE' }),
       );
@@ -335,9 +518,13 @@ describe('MaintenanceSchedulesService', () => {
         frequencyDays: null,
       };
 
-      mockPrismaService.maintenanceSchedule.findUnique.mockResolvedValue(mockSchedule);
+      mockPrismaService.maintenanceSchedule.findUnique.mockResolvedValue(
+        mockSchedule,
+      );
 
-      await expect(service.complete('schedule-1', userId)).rejects.toThrow(BadRequestException);
+      await expect(service.complete('schedule-1', userId)).rejects.toThrow(
+        BadRequestException,
+      );
       await expect(service.complete('schedule-1', userId)).rejects.toThrow(
         'no frequencyDays set',
       );
@@ -358,18 +545,24 @@ describe('MaintenanceSchedulesService', () => {
         nextDueAtHours: new Prisma.Decimal(950),
       };
 
-      mockPrismaService.maintenanceSchedule.findUnique.mockResolvedValue(mockSchedule);
-      mockPrismaService.maintenanceSchedule.update.mockResolvedValue(updatedSchedule);
+      mockPrismaService.maintenanceSchedule.findUnique.mockResolvedValue(
+        mockSchedule,
+      );
+      mockPrismaService.maintenanceSchedule.update.mockResolvedValue(
+        updatedSchedule,
+      );
 
       const result = await service.complete('schedule-1', userId);
 
-      expect(mockPrismaService.maintenanceSchedule.update).toHaveBeenCalledWith({
-        where: { id: 'schedule-1' },
-        data: expect.objectContaining({
-          nextDueAtHours: expect.any(Prisma.Decimal),
-        }),
-        include: expect.any(Object),
-      });
+      expect(mockPrismaService.maintenanceSchedule.update).toHaveBeenCalledWith(
+        {
+          where: { id: 'schedule-1' },
+          data: expect.objectContaining({
+            nextDueAtHours: expect.any(Prisma.Decimal),
+          }),
+          include: expect.any(Object),
+        },
+      );
     });
 
     it('should throw BadRequestException if RUNTIME schedule has no frequencyHours', async () => {
@@ -380,9 +573,13 @@ describe('MaintenanceSchedulesService', () => {
         frequencyHours: null,
       };
 
-      mockPrismaService.maintenanceSchedule.findUnique.mockResolvedValue(mockSchedule);
+      mockPrismaService.maintenanceSchedule.findUnique.mockResolvedValue(
+        mockSchedule,
+      );
 
-      await expect(service.complete('schedule-1', userId)).rejects.toThrow(BadRequestException);
+      await expect(service.complete('schedule-1', userId)).rejects.toThrow(
+        BadRequestException,
+      );
       await expect(service.complete('schedule-1', userId)).rejects.toThrow(
         'no frequencyHours set',
       );
@@ -407,11 +604,19 @@ describe('MaintenanceSchedulesService', () => {
         currentRunHours: new Prisma.Decimal(150),
       };
 
-      mockPrismaService.maintenanceSchedule.findUnique.mockResolvedValue(mockSchedule);
-      mockPrismaService.maintenanceSchedule.update.mockResolvedValue(updatedSchedule);
-      mockPrismaService.runHourReading.create.mockResolvedValue({ id: 'reading-1' });
+      mockPrismaService.maintenanceSchedule.findUnique.mockResolvedValue(
+        mockSchedule,
+      );
+      mockPrismaService.maintenanceSchedule.update.mockResolvedValue(
+        updatedSchedule,
+      );
+      mockPrismaService.runHourReading.create.mockResolvedValue({
+        id: 'reading-1',
+      });
 
-      const result = await service.recordRunHours('schedule-1', userId, { hours: 150 });
+      const result = await service.recordRunHours('schedule-1', userId, {
+        hours: 150,
+      });
 
       expect(mockPrismaService.runHourReading.create).toHaveBeenCalledWith({
         data: {
@@ -420,11 +625,13 @@ describe('MaintenanceSchedulesService', () => {
           recordedById: userId,
         },
       });
-      expect(mockPrismaService.maintenanceSchedule.update).toHaveBeenCalledWith({
-        where: { id: 'schedule-1' },
-        data: { currentRunHours: expect.any(Prisma.Decimal) },
-        include: expect.any(Object),
-      });
+      expect(mockPrismaService.maintenanceSchedule.update).toHaveBeenCalledWith(
+        {
+          where: { id: 'schedule-1' },
+          data: { currentRunHours: expect.any(Prisma.Decimal) },
+          include: expect.any(Object),
+        },
+      );
       expect(mockAuditLogService.log).toHaveBeenCalledWith(
         expect.objectContaining({ action: 'RECORD_RUN_HOURS' }),
       );
@@ -437,7 +644,9 @@ describe('MaintenanceSchedulesService', () => {
         basis: MaintenanceBasis.CALENDAR,
       };
 
-      mockPrismaService.maintenanceSchedule.findUnique.mockResolvedValue(mockSchedule);
+      mockPrismaService.maintenanceSchedule.findUnique.mockResolvedValue(
+        mockSchedule,
+      );
 
       await expect(
         service.recordRunHours('schedule-1', userId, { hours: 150 }),
@@ -456,7 +665,9 @@ describe('MaintenanceSchedulesService', () => {
         nextDueAtHours: new Prisma.Decimal(500),
       };
 
-      mockPrismaService.maintenanceSchedule.findUnique.mockResolvedValue(mockSchedule);
+      mockPrismaService.maintenanceSchedule.findUnique.mockResolvedValue(
+        mockSchedule,
+      );
 
       await expect(
         service.recordRunHours('schedule-1', userId, { hours: 100 }),
@@ -473,7 +684,11 @@ describe('MaintenanceSchedulesService', () => {
         basis: MaintenanceBasis.RUNTIME,
         currentRunHours: new Prisma.Decimal(400),
         nextDueAtHours: new Prisma.Decimal(500),
-        inventoryItem: { name: 'Generator A', campus: 'Main', maintainableAssetProfile: null },
+        inventoryItem: {
+          name: 'Generator A',
+          campus: 'Main',
+          maintainableAssetProfile: null,
+        },
       };
 
       const updatedSchedule = {
@@ -482,10 +697,18 @@ describe('MaintenanceSchedulesService', () => {
         nextDueAtHours: new Prisma.Decimal(500),
       };
 
-      mockPrismaService.maintenanceSchedule.findUnique.mockResolvedValueOnce(mockSchedule);
-      mockPrismaService.maintenanceSchedule.update.mockResolvedValue(updatedSchedule);
-      mockPrismaService.maintenanceSchedule.findUnique.mockResolvedValueOnce(updatedSchedule);
-      mockPrismaService.runHourReading.create.mockResolvedValue({ id: 'reading-1' });
+      mockPrismaService.maintenanceSchedule.findUnique.mockResolvedValueOnce(
+        mockSchedule,
+      );
+      mockPrismaService.maintenanceSchedule.update.mockResolvedValue(
+        updatedSchedule,
+      );
+      mockPrismaService.maintenanceSchedule.findUnique.mockResolvedValueOnce(
+        updatedSchedule,
+      );
+      mockPrismaService.runHourReading.create.mockResolvedValue({
+        id: 'reading-1',
+      });
       mockPrismaService.workRequest.findFirst.mockResolvedValue(null);
       mockPrismaService.office.upsert.mockResolvedValue({ id: 'office-1' });
       mockPrismaService.sequenceCounter.upsert.mockResolvedValue({ count: 1 });
@@ -514,11 +737,21 @@ describe('MaintenanceSchedulesService', () => {
         currentRunHours: new Prisma.Decimal(550),
       };
 
-      mockPrismaService.maintenanceSchedule.findUnique.mockResolvedValueOnce(mockSchedule);
-      mockPrismaService.maintenanceSchedule.update.mockResolvedValue(updatedSchedule);
-      mockPrismaService.maintenanceSchedule.findUnique.mockResolvedValueOnce(updatedSchedule);
-      mockPrismaService.runHourReading.create.mockResolvedValue({ id: 'reading-1' });
-      mockPrismaService.workRequest.findFirst.mockResolvedValue({ id: 'existing-wr' });
+      mockPrismaService.maintenanceSchedule.findUnique.mockResolvedValueOnce(
+        mockSchedule,
+      );
+      mockPrismaService.maintenanceSchedule.update.mockResolvedValue(
+        updatedSchedule,
+      );
+      mockPrismaService.maintenanceSchedule.findUnique.mockResolvedValueOnce(
+        updatedSchedule,
+      );
+      mockPrismaService.runHourReading.create.mockResolvedValue({
+        id: 'reading-1',
+      });
+      mockPrismaService.workRequest.findFirst.mockResolvedValue({
+        id: 'existing-wr',
+      });
 
       await service.recordRunHours('schedule-1', userId, { hours: 550 });
 
@@ -531,7 +764,9 @@ describe('MaintenanceSchedulesService', () => {
 
     it('should deactivate a maintenance schedule', async () => {
       const mockSchedule = { id: 'schedule-1', title: 'Test Schedule' };
-      mockPrismaService.maintenanceSchedule.findUnique.mockResolvedValue(mockSchedule);
+      mockPrismaService.maintenanceSchedule.findUnique.mockResolvedValue(
+        mockSchedule,
+      );
       mockPrismaService.maintenanceSchedule.update.mockResolvedValue({
         ...mockSchedule,
         isActive: false,
@@ -539,10 +774,12 @@ describe('MaintenanceSchedulesService', () => {
 
       const result = await service.deactivate('schedule-1', userId);
 
-      expect(mockPrismaService.maintenanceSchedule.update).toHaveBeenCalledWith({
-        where: { id: 'schedule-1' },
-        data: { isActive: false },
-      });
+      expect(mockPrismaService.maintenanceSchedule.update).toHaveBeenCalledWith(
+        {
+          where: { id: 'schedule-1' },
+          data: { isActive: false },
+        },
+      );
       expect(mockAuditLogService.log).toHaveBeenCalledWith(
         expect.objectContaining({ action: 'DEACTIVATE' }),
       );

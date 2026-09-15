@@ -3,6 +3,8 @@ import {
   Injectable,
   NotFoundException,
   BadRequestException,
+  ForbiddenException,
+  ConflictException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditLogService } from '../audit-log/audit-log.service';
@@ -18,6 +20,13 @@ import {
 } from '@prisma/client';
 import { BorrowRequestsGateway } from '../gateway/borrow-requests.gateway';
 import { NotificationsService } from '../notifications/notifications.service';
+import { InventoryLedgerService } from '../stock-movements/inventory-ledger.service';
+
+const BORROW_RETURN_PRIVILEGED_ROLES = [
+  'Administrator',
+  'Building & Grounds Officer',
+  'Property Custodian',
+];
 
 @Injectable()
 export class BorrowRequestsService {
@@ -26,6 +35,7 @@ export class BorrowRequestsService {
     private readonly auditLogService: AuditLogService,
     private readonly gateway: BorrowRequestsGateway,
     private readonly notificationsService: NotificationsService,
+    private readonly inventoryLedgerService: InventoryLedgerService,
   ) {}
 
   private include = {
@@ -108,174 +118,84 @@ export class BorrowRequestsService {
 
   // ---------- APPROVE ----------
   async approve(id: string, adminId: string, dto: ProcessBorrowRequestDto) {
-    const request = await this.findOne(id);
-    if (request.status !== BorrowRequestStatus.PENDING) {
-      throw new BadRequestException('Only pending requests can be approved.');
-    }
-
     const type = dto.transactionType ?? TransactionType.ISSUANCE;
     const notes = dto.notes;
-    const dueDate = dto.dueDate ? new Date(dto.dueDate) : request.dueDate;
 
     const updatedRequest = await this.prisma.$transaction(async (tx) => {
-      const item = await tx.inventoryItem.findUnique({
-        where: { id: request.inventoryItemId },
+      const request = await tx.borrowRequest.findUnique({
+        where: { id },
+        include: this.include,
       });
-      if (!item) throw new NotFoundException('Item no longer exists.');
+      if (!request) throw new NotFoundException('Borrow request not found.');
 
-      const itemQty = item.quantity.toNumber();
-      const reqQty = request.quantity.toNumber();
+      // Claim the pending request in the same transaction. A competing
+      // approval gets no claim and therefore cannot create issue side effects.
+      const claim = await tx.borrowRequest.updateMany({
+        where: { id, status: BorrowRequestStatus.PENDING },
+        data: {
+          status: type === TransactionType.RETURN
+            ? BorrowRequestStatus.RETURNED
+            : BorrowRequestStatus.APPROVED,
+          approvedById: adminId,
+          approvedAt: new Date(),
+          decisionNotes: notes,
+          dueDate: dto.dueDate ? new Date(dto.dueDate) : request.dueDate,
+          ...(type === TransactionType.RETURN && { returnedAt: new Date() }),
+        },
+      });
+      if (claim.count !== 1) {
+        throw new ConflictException('Borrow request has already been processed.');
+      }
 
-      // ---------- BRANCH 1: ISSUANCE ----------
-      if (type === TransactionType.ISSUANCE) {
-        if (itemQty < reqQty) {
-          throw new BadRequestException('Insufficient stock at time of approval.');
-        }
-
-        await tx.inventoryItem.update({
-          where: { id: request.inventoryItemId },
-          data: {
-            quantity: { decrement: request.quantity },
-            status: ItemStatus.BORROWED,
-          },
+      if (type === TransactionType.ISSUANCE || type === TransactionType.WITHDRAWAL) {
+        await this.inventoryLedgerService.apply(tx, {
+          inventoryItemId: request.inventoryItemId,
+          quantityChange: request.quantity.negated(),
+          movementType: StockMovementType.WITHDRAWN,
+          reason: `Borrow approved (${type}): ${request.id}`,
+          performedById: adminId,
+          referenceType: 'BorrowRequest',
+          referenceId: request.id,
         });
 
-        const controlNo = await this.generateTransactionControlNo();
+        if (type === TransactionType.ISSUANCE) {
+          await tx.inventoryItem.update({
+            where: { id: request.inventoryItemId },
+            data: { status: ItemStatus.BORROWED },
+          });
+        }
+
         const transaction = await tx.itemTransaction.create({
           data: {
-            controlNumber: controlNo,
-            transactionType: TransactionType.ISSUANCE,
+            controlNumber: await this.generateTransactionControlNo(tx),
+            transactionType: type,
             inventoryItemId: request.inventoryItemId,
             quantity: request.quantity,
             custodianId: adminId,
             transactionDate: new Date(),
-            notes: `Borrow request approved (ISSUANCE): ${request.id}`,
+            notes: `Borrow request approved (${type}): ${request.id}`,
           },
         });
-
-        await tx.stockMovement.create({
-          data: {
-            movementType: StockMovementType.WITHDRAWN,
-            quantityChange: request.quantity.mul(-1),
-            quantityAfter: new Prisma.Decimal(itemQty - reqQty),
-            reason: `Borrow approved (ISSUANCE): ${request.id}`,
-            inventoryItemId: request.inventoryItemId,
-            performedById: adminId,
-            referenceType: 'BorrowRequest',
-            referenceId: request.id,
-          },
+        await tx.borrowRequest.update({ where: { id }, data: { transactionId: transaction.id } });
+      } else if (type === TransactionType.RETURN) {
+        await this.inventoryLedgerService.apply(tx, {
+          inventoryItemId: request.inventoryItemId,
+          quantityChange: request.quantity,
+          movementType: StockMovementType.RETURNED,
+          reason: `Borrow approved as RETURN: ${request.id}`,
+          performedById: adminId,
+          referenceType: 'BorrowRequest',
+          referenceId: request.id,
         });
-
-        await tx.borrowRequest.update({
-          where: { id },
-          data: {
-            status: BorrowRequestStatus.APPROVED,
-            approvedById: adminId,
-            approvedAt: new Date(),
-            transactionId: transaction.id,
-            decisionNotes: notes,
-            dueDate: dueDate,
-          },
-        });
-      }
-
-      // ---------- BRANCH 2: WITHDRAWAL ----------
-      else if (type === TransactionType.WITHDRAWAL) {
-        if (itemQty < reqQty) {
-          throw new BadRequestException('Insufficient stock at time of approval.');
-        }
-
-        await tx.inventoryItem.update({
-          where: { id: request.inventoryItemId },
-          data: {
-            quantity: { decrement: request.quantity },
-          },
-        });
-
-        const controlNo = await this.generateTransactionControlNo();
-        const transaction = await tx.itemTransaction.create({
-          data: {
-            controlNumber: controlNo,
-            transactionType: TransactionType.WITHDRAWAL,
-            inventoryItemId: request.inventoryItemId,
-            quantity: request.quantity,
-            custodianId: adminId,
-            transactionDate: new Date(),
-            notes: `Borrow request approved (WITHDRAWAL): ${request.id}`,
-          },
-        });
-
-        await tx.stockMovement.create({
-          data: {
-            movementType: StockMovementType.WITHDRAWN,
-            quantityChange: request.quantity.mul(-1),
-            quantityAfter: new Prisma.Decimal(itemQty - reqQty),
-            reason: `Borrow approved (WITHDRAWAL): ${request.id}`,
-            inventoryItemId: request.inventoryItemId,
-            performedById: adminId,
-            referenceType: 'BorrowRequest',
-            referenceId: request.id,
-          },
-        });
-
-        await tx.borrowRequest.update({
-          where: { id },
-          data: {
-            status: BorrowRequestStatus.APPROVED,
-            approvedById: adminId,
-            approvedAt: new Date(),
-            transactionId: transaction.id,
-            decisionNotes: notes,
-            dueDate: dueDate,
-          },
-        });
-      }
-
-      // ---------- BRANCH 3: RETURN ----------
-      else if (type === TransactionType.RETURN) {
-        const newQty = itemQty + reqQty;
-        await tx.inventoryItem.update({
-          where: { id: request.inventoryItemId },
-          data: {
-            quantity: { increment: request.quantity },
-          },
-        });
-
-        const controlNo = await this.generateTransactionControlNo();
         await tx.itemTransaction.create({
           data: {
-            controlNumber: controlNo,
+            controlNumber: await this.generateTransactionControlNo(tx),
             transactionType: TransactionType.RETURN,
             inventoryItemId: request.inventoryItemId,
             quantity: request.quantity,
             custodianId: adminId,
             transactionDate: new Date(),
             notes: `Borrow request closed as RETURN (direct): ${request.id}`,
-          },
-        });
-
-        await tx.stockMovement.create({
-          data: {
-            movementType: StockMovementType.RETURNED,
-            quantityChange: request.quantity,
-            quantityAfter: new Prisma.Decimal(newQty),
-            reason: `Borrow approved as RETURN: ${request.id}`,
-            inventoryItemId: request.inventoryItemId,
-            performedById: adminId,
-            referenceType: 'BorrowRequest',
-            referenceId: request.id,
-          },
-        });
-
-        await tx.borrowRequest.update({
-          where: { id },
-          data: {
-            status: BorrowRequestStatus.RETURNED,
-            approvedById: adminId,
-            approvedAt: new Date(),
-            decisionNotes: notes,
-            dueDate: dueDate,
-            returnedAt: new Date(),
           },
         });
       }
@@ -286,7 +206,7 @@ export class BorrowRequestsService {
         entityId: id,
         description: `Borrow request approved as ${type}`,
         performedById: adminId,
-      });
+      }, tx);
 
       return tx.borrowRequest.findUnique({
         where: { id },
@@ -358,8 +278,14 @@ export class BorrowRequestsService {
   }
 
   // ---------- RETURN ----------
-  async markReturned(id: string, userId: string) {
+  async markReturned(id: string, userId: string, userRole?: string) {
     const request = await this.findOne(id);
+    if (
+      request.requestedById !== userId &&
+      !BORROW_RETURN_PRIVILEGED_ROLES.includes(userRole ?? '')
+    ) {
+      throw new ForbiddenException('You may only return your own borrow request.');
+    }
     if (request.status !== BorrowRequestStatus.APPROVED) {
       throw new BadRequestException('Only approved requests can be returned.');
     }
@@ -372,15 +298,39 @@ export class BorrowRequestsService {
 
     if (transactionType === TransactionType.ISSUANCE) {
       const updatedRequest = await this.prisma.$transaction(async (tx) => {
-        await tx.inventoryItem.update({
-          where: { id: request.inventoryItemId },
+        // Re-check and claim inside the transaction so two return calls cannot
+        // each restore stock and write a return transaction.
+        const claim = await tx.borrowRequest.updateMany({
+          where: {
+            id,
+            status: BorrowRequestStatus.APPROVED,
+            returnedAt: null,
+          },
           data: {
-            quantity: { increment: request.quantity },
-            status: ItemStatus.GOOD_CONDITION,
+            status: BorrowRequestStatus.RETURNED,
+            returnedAt: new Date(),
           },
         });
+        if (claim.count !== 1) {
+          throw new ConflictException('Borrow request has already been returned or processed.');
+        }
 
-        const controlNo = await this.generateTransactionControlNo();
+        await this.inventoryLedgerService.apply(tx, {
+          inventoryItemId: request.inventoryItemId,
+          quantityChange: request.quantity,
+          movementType: StockMovementType.RETURNED,
+          reason: `Borrow returned: ${request.id}`,
+          performedById: userId,
+          referenceType: 'BorrowRequest',
+          referenceId: request.id,
+        });
+
+        await tx.inventoryItem.update({
+          where: { id: request.inventoryItemId },
+          data: { status: ItemStatus.GOOD_CONDITION },
+        });
+
+        const controlNo = await this.generateTransactionControlNo(tx);
         await tx.itemTransaction.create({
           data: {
             controlNumber: controlNo,
@@ -393,28 +343,16 @@ export class BorrowRequestsService {
           },
         });
 
-        const item = await tx.inventoryItem.findUnique({
-          where: { id: request.inventoryItemId },
-        });
-        await tx.stockMovement.create({
-          data: {
-            movementType: StockMovementType.RETURNED,
-            quantityChange: request.quantity,
-            quantityAfter: item!.quantity,
-            reason: `Borrow returned: ${request.id}`,
-            inventoryItemId: request.inventoryItemId,
-            performedById: userId,
-            referenceType: 'BorrowRequest',
-            referenceId: request.id,
-          },
-        });
+        await this.auditLogService.log({
+          action: 'RETURN_BORROW',
+          entityType: 'BorrowRequest',
+          entityId: id,
+          description: 'Borrow request returned (ISSUANCE)',
+          performedById: userId,
+        }, tx);
 
-        return tx.borrowRequest.update({
+        return tx.borrowRequest.findUniqueOrThrow({
           where: { id },
-          data: {
-            status: BorrowRequestStatus.RETURNED,
-            returnedAt: new Date(),
-          },
           include: this.include,
         });
       });
@@ -422,14 +360,6 @@ export class BorrowRequestsService {
       if (!updatedRequest) {
         throw new NotFoundException('Failed to update borrow request.');
       }
-
-      await this.auditLogService.log({
-        action: 'RETURN_BORROW',
-        entityType: 'BorrowRequest',
-        entityId: id,
-        description: `Borrow request returned (ISSUANCE)`,
-        performedById: userId,
-      });
 
       // ✅ Notify the requester via WebSocket
       this.gateway.notifyUser(updatedRequest.requestedById, {
@@ -449,21 +379,22 @@ export class BorrowRequestsService {
     } 
     
     else if (transactionType === TransactionType.WITHDRAWAL) {
-      const updatedRequest = await this.prisma.borrowRequest.update({
-        where: { id },
-        data: {
-          status: BorrowRequestStatus.RETURNED,
-          returnedAt: new Date(),
-        },
-        include: this.include,
-      });
-
-      await this.auditLogService.log({
-        action: 'RETURN_BORROW',
-        entityType: 'BorrowRequest',
-        entityId: id,
-        description: `Borrow request closed-out (WITHDRAWAL)`,
-        performedById: userId,
+      const updatedRequest = await this.prisma.$transaction(async (tx) => {
+        const claim = await tx.borrowRequest.updateMany({
+          where: { id, status: BorrowRequestStatus.APPROVED, returnedAt: null },
+          data: { status: BorrowRequestStatus.RETURNED, returnedAt: new Date() },
+        });
+        if (claim.count !== 1) {
+          throw new ConflictException('Borrow request has already been returned or processed.');
+        }
+        await this.auditLogService.log({
+          action: 'RETURN_BORROW',
+          entityType: 'BorrowRequest',
+          entityId: id,
+          description: 'Borrow request closed-out (WITHDRAWAL)',
+          performedById: userId,
+        }, tx);
+        return tx.borrowRequest.findUniqueOrThrow({ where: { id }, include: this.include });
       });
 
       // ✅ Notify the requester via WebSocket
@@ -516,9 +447,9 @@ export class BorrowRequestsService {
   }
 
   // ---------- HELPER ----------
-  private async generateTransactionControlNo(): Promise<string> {
+  private async generateTransactionControlNo(tx: Prisma.TransactionClient): Promise<string> {
     const year = new Date().getFullYear();
-    const seq = await this.prisma.sequenceCounter.upsert({
+    const seq = await tx.sequenceCounter.upsert({
       where: { type_year: { type: 'ITEM_TRANSACTION', year } },
       update: { count: { increment: 1 } },
       create: { type: 'ITEM_TRANSACTION', year, count: 1 },

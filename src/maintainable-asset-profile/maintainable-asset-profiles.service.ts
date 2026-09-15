@@ -29,7 +29,7 @@ export class MaintainableAssetProfilesService {
     if (!item) {
       throw new NotFoundException('Inventory item not found.');
     }
-    if (item.maintainableAssetProfile) {
+    if (item.maintainableAssetProfile?.isActive) {
       throw new ConflictException(
         'This inventory item already has a maintainable-asset profile.',
       );
@@ -42,6 +42,36 @@ export class MaintainableAssetProfilesService {
       if (!config) {
         throw new BadRequestException('Unknown unit type config.');
       }
+    }
+
+    const existingProfile = item.maintainableAssetProfile;
+    if (existingProfile) {
+      return this.prisma.$transaction(async (tx) => {
+        const profile = await tx.maintainableAssetProfile.update({
+          where: { id: existingProfile.id },
+          data: {
+            assetType: dto.assetType,
+            priority: dto.priority,
+            unitTypeConfigId: dto.unitTypeConfigId,
+            notes: dto.notes,
+            isActive: true,
+          },
+          include: this.defaultInclude,
+        });
+
+        await this.auditLogService.log(
+          {
+            action: 'REACTIVATE',
+            entityType: 'MaintainableAssetProfile',
+            entityId: profile.id,
+            description: `Reactivated maintainable-asset profile for inventory item "${item.name}" (${profile.assetType})`,
+            performedById: userId,
+          },
+          tx,
+        );
+
+        return profile;
+      });
     }
 
     const profile = await this.prisma.maintainableAssetProfile.create({
@@ -101,7 +131,11 @@ export class MaintainableAssetProfilesService {
     return profile;
   }
 
-  async update(id: string, userId: string, dto: UpdateMaintainableAssetProfileDto) {
+  async update(
+    id: string,
+    userId: string,
+    dto: UpdateMaintainableAssetProfileDto,
+  ) {
     const profile = await this.findOne(id);
 
     if (dto.unitTypeConfigId) {

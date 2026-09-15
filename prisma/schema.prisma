@@ -427,6 +427,8 @@ model MaintenanceSchedule {
   @@index([isActive])
   @@index([isActive, nextDueAt])
   @@index([basis])                                        // NEW
+  // The PostgreSQL partial unique index in the maintenance-schedule migration
+  // enforces one active schedule for each inventory item and basis.
 }
 
 model MaintainableAssetProfile {

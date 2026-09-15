@@ -9,12 +9,14 @@ import { PrismaService } from '../prisma/prisma.service';
 import { AuditLogService } from '../audit-log/audit-log.service';
 import { CreateStockMovementDto } from './dto/create-stock-movement.dto';
 import { QueryStockMovementDto } from './dto/query-stock-movement.dto';
+import { InventoryLedgerService } from './inventory-ledger.service';
 
 @Injectable()
 export class StockMovementsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly auditLogService: AuditLogService,
+    private readonly inventoryLedgerService: InventoryLedgerService,
   ) {}
 
   private readonly defaultInclude = {
@@ -41,12 +43,6 @@ export class StockMovementsService {
    * Create a stock movement and update inventory quantity atomically.
    */
   async create(userId: string, dto: CreateStockMovementDto) {
-    const item = await this.prisma.inventoryItem.findUnique({
-      where: { id: dto.inventoryItemId },
-    });
-    if (!item) throw new NotFoundException('Inventory item not found.');
-    if (!item.isActive) throw new BadRequestException('Item is archived.');
-
     if (dto.quantityChange === 0) {
       throw new BadRequestException('Quantity change cannot be zero.');
     }
@@ -71,49 +67,33 @@ export class StockMovementsService {
       );
     }
 
-    const currentQuantity = item.quantity.toNumber();
-    const newQuantity = currentQuantity + dto.quantityChange;
-    if (newQuantity < 0) {
-      throw new BadRequestException(
-        `Insufficient stock. Current quantity: ${currentQuantity}, requested change: ${dto.quantityChange}`,
-      );
-    }
-
     if (dto.referenceId) {
       // Note: Generic reference - actual entity validation depends on referenceType
     }
 
     return this.prisma.$transaction(async (tx) => {
-      await tx.inventoryItem.update({
-        where: { id: dto.inventoryItemId },
-        data: {
-          quantity: this.toDecimal(newQuantity),
-        },
-      });
-
-      const stockMovement = await tx.stockMovement.create({
-        data: {
-          movementType: dto.movementType,
-          quantityChange: this.toDecimal(dto.quantityChange),
-          quantityAfter: this.toDecimal(newQuantity),
-          reason: dto.reason,
-          referenceType: dto.referenceType,
-          referenceId: dto.referenceId,
-          inventoryItemId: dto.inventoryItemId,
-          performedById: userId,
-        },
-        include: this.defaultInclude,
+      const { inventoryItem, stockMovement } = await this.inventoryLedgerService.apply(tx, {
+        inventoryItemId: dto.inventoryItemId,
+        quantityChange: this.toDecimal(dto.quantityChange),
+        movementType: dto.movementType,
+        reason: dto.reason,
+        referenceType: dto.referenceType,
+        referenceId: dto.referenceId,
+        performedById: userId,
       });
 
       await this.auditLogService.log({
         action: 'CREATE',
         entityType: 'StockMovement',
         entityId: stockMovement.id,
-        description: `${dto.movementType} of ${dto.quantityChange} ${item.unit} of ${item.name}`,
+        description: `${dto.movementType} of ${dto.quantityChange} ${inventoryItem.unit} of ${inventoryItem.name}`,
         performedById: userId,
-      });
+      }, tx);
 
-      return stockMovement;
+      return tx.stockMovement.findUniqueOrThrow({
+        where: { id: stockMovement.id },
+        include: this.defaultInclude,
+      });
     });
   }
 

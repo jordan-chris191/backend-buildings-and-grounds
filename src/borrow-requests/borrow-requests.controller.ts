@@ -91,6 +91,6 @@ async findAll(
   @UseGuards(JwtAuthGuard)
   @Patch(':id/return')
   returnItem(@Param('id') id: string, @Req() req) {
-    return this.borrowRequestsService.markReturned(id, req.user.userId);
+    return this.borrowRequestsService.markReturned(id, req.user.userId, req.user.role);
   }
 }

@@ -6,8 +6,9 @@ import { PrismaModule } from '../prisma/prisma.module';
 import { AuthModule } from '../auth/auth.module';
 import { AuditLogModule } from '../audit-log/audit-log.module';
 import { GatewayModule } from 'src/gateway/gateway.module';
+import { StockMovementsModule } from '../stock-movements/stock-movements.module';
 @Module({
-  imports: [PrismaModule, AuthModule, AuditLogModule, GatewayModule],
+  imports: [PrismaModule, AuthModule, AuditLogModule, GatewayModule, StockMovementsModule],
   controllers: [InventoryController],
   providers: [InventoryService],
 })

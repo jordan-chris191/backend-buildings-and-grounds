@@ -15,6 +15,7 @@ import {
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditLogService } from '../audit-log/audit-log.service';
 import { InventoryGateway } from '../gateway/inventory.gateway';
+import { InventoryLedgerService } from '../stock-movements/inventory-ledger.service';
 
 import { CreateInventoryItemDto } from './dto/create-inventory-item.dto';
 import { UpdateInventoryItemDto } from './dto/update-inventory-item.dto';
@@ -27,6 +28,7 @@ export class InventoryService {
     private readonly prisma: PrismaService,
     private readonly auditLogService: AuditLogService,
     private readonly inventoryGateway: InventoryGateway,
+    private readonly inventoryLedgerService: InventoryLedgerService,
   ) {}
 
   private readonly defaultInclude = {
@@ -72,7 +74,9 @@ export class InventoryService {
           name: dto.name,
           type: dto.type,
           description: dto.description,
-          quantity: this.toDecimal(quantity),
+          // New rows start at zero; initial stock, when present, is applied by
+          // the ledger below with its matching RECEIVED movement.
+          quantity: this.toDecimal(0),
           unit: dto.unit,
           location: dto.location,
           propertyNumber: dto.propertyNumber,
@@ -88,16 +92,15 @@ export class InventoryService {
         include: this.defaultInclude,
       });
 
-      await tx.stockMovement.create({
-        data: {
+      if (quantity > 0) {
+        await this.inventoryLedgerService.apply(tx, {
           movementType: StockMovementType.RECEIVED,
           quantityChange: this.toDecimal(quantity),
-          quantityAfter: this.toDecimal(quantity),
           reason: 'Initial stock',
           inventoryItemId: item.id,
           performedById: userId,
-        },
-      });
+        });
+      }
 
       await this.auditLogService.log({
         action: 'CREATE',
@@ -105,9 +108,12 @@ export class InventoryService {
         entityId: item.id,
         description: `Created inventory item "${item.name}" (${item.type})`,
         performedById: userId,
-      });
+      }, tx);
 
-      return item;
+      return tx.inventoryItem.findUniqueOrThrow({
+        where: { id: item.id },
+        include: this.defaultInclude,
+      });
     });
 
     const responseItem = this.toResponseItem(rawItem);
@@ -195,15 +201,26 @@ export class InventoryService {
       throw new BadRequestException('Consumable items require a unit.');
     }
 
+    // The DTO and global ValidationPipe reject quantity at the HTTP boundary.
+    // Reject it here too for direct/internal callers that bypass validation.
+    const metadata = dto as UpdateInventoryItemDto & {
+      quantity?: unknown;
+    };
+    if (metadata.quantity !== undefined) {
+      throw new BadRequestException(
+        'Quantity changes must use the inventory adjustment or transaction path.',
+      );
+    }
+    const { quantity: _quantity, ...updateData } = metadata;
+
     const updated = await this.prisma.inventoryItem.update({
       where: { id },
       data: {
-        ...dto,
-        acquisitionDate: dto.acquisitionDate
-          ? new Date(dto.acquisitionDate)
+        ...updateData,
+        acquisitionDate: updateData.acquisitionDate
+          ? new Date(updateData.acquisitionDate)
           : undefined,
-        unitCost: dto.unitCost !== undefined ? this.toDecimal(dto.unitCost) : undefined,
-        quantity: dto.quantity !== undefined ? this.toDecimal(dto.quantity) : undefined,
+        unitCost: updateData.unitCost !== undefined ? this.toDecimal(updateData.unitCost) : undefined,
       },
       include: this.defaultInclude,
     });
@@ -218,15 +235,6 @@ export class InventoryService {
 
     const responseItem = this.toResponseItem(updated);
 
-    if (dto.quantity !== undefined) {
-      this.inventoryGateway.notifyInventoryUpdate(
-        responseItem.id,
-        responseItem.name,
-        Number(responseItem.quantity),
-        responseItem.status,
-      );
-    }
-
     return responseItem;
   }
 
@@ -236,30 +244,34 @@ export class InventoryService {
     const oldQuantity = Number(item.quantity);
     const change = newQuantity - oldQuantity;
 
-    const [updated] = await this.prisma.$transaction([
-      this.prisma.inventoryItem.update({
-        where: { id },
-        data: { quantity: this.toDecimal(newQuantity) },
-        include: this.defaultInclude,
-      }),
-      this.prisma.stockMovement.create({
-        data: {
-          movementType: StockMovementType.ADJUSTED,
-          quantityChange: this.toDecimal(change),
-          quantityAfter: this.toDecimal(newQuantity),
-          reason,
-          inventoryItemId: id,
-          performedById: userId,
-        },
-      }),
-    ]);
+    if (newQuantity < 0) {
+      throw new BadRequestException('Quantity cannot be negative.');
+    }
+    if (change === 0) {
+      return item;
+    }
 
-    await this.auditLogService.log({
-      action: 'ADJUST_QUANTITY',
-      entityType: 'InventoryItem',
-      entityId: id,
-      description: `Adjusted quantity from ${oldQuantity} to ${newQuantity}. Reason: ${reason}`,
-      performedById: userId,
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const { inventoryItem } = await this.inventoryLedgerService.apply(tx, {
+        inventoryItemId: id,
+        quantityChange: this.toDecimal(change),
+        movementType: StockMovementType.ADJUSTED,
+        reason,
+        performedById: userId,
+      });
+
+      await this.auditLogService.log({
+        action: 'ADJUST_QUANTITY',
+        entityType: 'InventoryItem',
+        entityId: id,
+        description: `Adjusted quantity from ${oldQuantity} to ${newQuantity}. Reason: ${reason}`,
+        performedById: userId,
+      }, tx);
+
+      return tx.inventoryItem.findUniqueOrThrow({
+        where: { id: inventoryItem.id },
+        include: this.defaultInclude,
+      });
     });
 
     const responseItem = this.toResponseItem(updated);
@@ -282,21 +294,20 @@ export class InventoryService {
       throw new BadRequestException('Item is already archived.');
     }
 
-    return this.prisma.$transaction(async (tx) => {
+    await this.prisma.$transaction(async (tx) => {
+      if (!item.quantity.isZero()) {
+        await this.inventoryLedgerService.apply(tx, {
+          inventoryItemId: id,
+          quantityChange: item.quantity.negated(),
+          movementType: StockMovementType.WITHDRAWN,
+          reason: 'Item archived',
+          performedById,
+        });
+      }
+
       await tx.inventoryItem.update({
         where: { id },
         data: { isActive: false },
-      });
-
-      await tx.stockMovement.create({
-        data: {
-          movementType: StockMovementType.WITHDRAWN,
-          quantityChange: this.toDecimal(-Number(item.quantity)),
-          quantityAfter: this.toDecimal(0),
-          reason: 'Item archived',
-          inventoryItemId: id,
-          performedById,
-        },
       });
 
       await this.auditLogService.log({
@@ -305,17 +316,11 @@ export class InventoryService {
         entityId: id,
         description: `Archived inventory item "${item.name}"`,
         performedById,
-      });
-
-      this.inventoryGateway.notifyInventoryUpdate(
-        id,
-        item.name,
-        0,
-        'ARCHIVED',
-      );
-
-      return { message: 'Inventory item archived successfully.' };
+      }, tx);
     });
+
+    this.inventoryGateway.notifyInventoryUpdate(id, item.name, 0, 'ARCHIVED');
+    return { message: 'Inventory item archived successfully.' };
   }
 
   // ---------- UPDATE STATUS ----------
@@ -323,6 +328,16 @@ export class InventoryService {
     const item = await this.findOne(id);
 
     const rawUpdated = await this.prisma.$transaction(async (tx) => {
+      if (status === ItemStatus.DISPOSED && !item.quantity.isZero()) {
+        await this.inventoryLedgerService.apply(tx, {
+          inventoryItemId: id,
+          quantityChange: item.quantity.negated(),
+          movementType: StockMovementType.WITHDRAWN,
+          reason: `Item disposed (status changed to ${status})`,
+          performedById,
+        });
+      }
+
       const updated = await tx.inventoryItem.update({
         where: { id },
         data: {
@@ -332,26 +347,13 @@ export class InventoryService {
         include: this.defaultInclude,
       });
 
-      if (status === ItemStatus.DISPOSED) {
-        await tx.stockMovement.create({
-          data: {
-            movementType: StockMovementType.WITHDRAWN,
-            quantityChange: this.toDecimal(-Number(item.quantity)),
-            quantityAfter: this.toDecimal(0),
-            reason: `Item disposed (status changed to ${status})`,
-            inventoryItemId: id,
-            performedById,
-          },
-        });
-      }
-
       await this.auditLogService.log({
         action: 'STATUS_CHANGE',
         entityType: 'InventoryItem',
         entityId: id,
         description: `Changed status from ${item.status} to ${status}`,
         performedById,
-      });
+      }, tx);
 
       return updated;
     });
