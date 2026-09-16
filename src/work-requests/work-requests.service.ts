@@ -23,6 +23,7 @@ import { AssignWorkRequestDto } from './dto/assign-work-request.dto';
 import { CompleteWorkRequestDto } from './dto/complete-work-request.dto';
 import { ApproveWorkRequestDto } from './dto/approve-work-request.dto';
 import { RejectWorkRequestDto } from './dto/reject-work-request.dto';
+import { formatAssignmentRole, formatWorkRequestType } from './work-request-display';
 
 const PRIVILEGED_ROLES = ['ADMINISTRATOR', 'BUILDING_GROUNDS_OFFICER'];
 
@@ -409,7 +410,7 @@ if (!assignableStatuses.includes(wr.status)) {
       if (wr.status === RequestStatus.PENDING && changed.count !== 1) throw new ConflictException('Work request state changed concurrently.');
       assignedNotification = await this.notificationsService.createInTransaction(tx, {
         type: 'WORK_REQUEST_ASSIGNED', title: 'New Work Assignment',
-        message: `${wr.referenceNo}: ${wr.requestType} at ${wr.campus} (${dto.role})`,
+        message: `${wr.referenceNo}: ${formatWorkRequestType(wr.requestType)} at ${wr.campus} (${formatAssignmentRole(dto.role)})`,
         referenceNo: wr.referenceNo, userId: dto.userId, workRequestId: id,
       });
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
