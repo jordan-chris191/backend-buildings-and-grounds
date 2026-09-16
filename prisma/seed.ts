@@ -24,8 +24,8 @@ async function main() {
 
   await prisma.role.upsert({
     where: { code: 'CAMPUS_STAFF' },
-    update: { name: 'Campus Staff', isActive: true },
-    create: { code: 'CAMPUS_STAFF', name: 'Campus Staff' },
+    update: { name: 'Staff', isActive: true },
+    create: { code: 'CAMPUS_STAFF', name: 'Staff' },
   });
 
   await prisma.role.upsert({

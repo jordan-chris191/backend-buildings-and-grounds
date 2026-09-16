@@ -7,7 +7,7 @@ function check(value: unknown, message: string): asserts value { if (!value) thr
 
 async function main() {
   await prisma.$connect();
-  const role = await prisma.role.upsert({ where: { name: 'Campus Staff' }, update: {}, create: { code: 'CAMPUS_STAFF', name: 'Campus Staff' } });
+  const role = await prisma.role.upsert({ where: { name: 'Staff' }, update: {}, create: { code: 'CAMPUS_STAFF', name: 'Staff' } });
   const position = await prisma.position.upsert({ where: { name: 'Phase 3A Technician' }, update: { isActive: true }, create: { name: 'Phase 3A Technician' } });
   const office = await prisma.office.upsert({ where: { name_campus: { name: 'Phase 3A Office', campus: Campus.MC1 } }, update: { isActive: true }, create: { name: 'Phase 3A Office', campus: Campus.MC1 } });
   const users = await Promise.all([0, 1, 2].map(index => prisma.user.upsert({ where: { email: `phase3a-${index}@example.invalid` }, update: { isActive: true, positionId: position.id, officeId: office.id }, create: { email: `phase3a-${index}@example.invalid`, passwordHash: 'x', firstName: 'Phase', lastName: `${index}`, roleId: role.id, positionId: position.id, officeId: office.id } })));
