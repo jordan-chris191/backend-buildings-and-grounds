@@ -32,6 +32,7 @@ model User {
   roleId                      String
   positionId                  String?
   officeId                    String?
+  personId                    String?                     @unique
   transfersApproved           AssetTransfer[]             @relation("ApprovedTransfer")
   receivedTransfers           AssetTransfer[]             @relation("PersonReceivedTransfers")
   transfersInitiated          AssetTransfer[]             @relation("TransferredBy")
@@ -48,6 +49,7 @@ model User {
   refreshTokens               RefreshToken[]              @relation("UserRefreshTokens")
   stockMovementsPerformed     StockMovement[]             @relation("StockMovementPerformer")
   office                      Office?                     @relation("UserOffice", fields: [officeId], references: [id])
+  person                      Person?                     @relation("PersonUser", fields: [personId], references: [id])
   position                    Position?                   @relation("PositionUsers", fields: [positionId], references: [id])
   role                        Role                        @relation("UserRole", fields: [roleId], references: [id])
   requestedWorkRequests       WorkRequest[]               @relation("RequestedWorkRequests")
@@ -96,11 +98,14 @@ model Notification {
   createdAt     DateTime     @default(now())
   userId        String
   workRequestId String?
+  type          String?
+  referenceNo   String?
   user          User         @relation("UserNotifications", fields: [userId], references: [id], onDelete: Cascade)
   workRequest   WorkRequest? @relation("WorkRequestNotifications", fields: [workRequestId], references: [id], onDelete: Cascade)
 
   @@index([userId])
   @@index([isRead])
+  @@index([type])
 }
 
 model Office {
@@ -131,6 +136,7 @@ model Person {
   assetTransfersAsHolder  AssetTransfer[]      @relation("TransferNewHolder")
   transferBatchesAsHolder AssetTransferBatch[] @relation("TransferBatchNewHolder")
   transactions            ItemTransaction[]    @relation("PersonTransactions")
+  user                    User?                @relation("PersonUser")
 
   @@index([studentId])
   @@index([type])

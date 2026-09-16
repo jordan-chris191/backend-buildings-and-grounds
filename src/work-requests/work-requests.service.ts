@@ -332,6 +332,7 @@ if (!assignableStatuses.includes(wr.status)) {
       throw new BadRequestException('Work request must be approved before staff can be assigned.');
     }
 
+    let assignedNotification: { id: string } | undefined;
     await this.prisma.$transaction(async tx => {
       const assignee = await tx.user.findUnique({ where: { id: dto.userId }, include: { role: true, position: true } });
       if (!assignee?.isActive || !assignee.position?.isActive) throw new BadRequestException('Assignee and position must be active.');
@@ -344,6 +345,11 @@ if (!assignableStatuses.includes(wr.status)) {
       }
       const changed = await tx.workRequest.updateMany({ where: { id, status: RequestStatus.PENDING, approvalStatus: ApprovalStatus.APPROVED }, data: { status: RequestStatus.ASSIGNED } });
       if (wr.status === RequestStatus.PENDING && changed.count !== 1) throw new ConflictException('Work request state changed concurrently.');
+      assignedNotification = await this.notificationsService.createInTransaction(tx, {
+        type: 'WORK_REQUEST_ASSIGNED', title: 'New Work Assignment',
+        message: `${wr.referenceNo}: ${wr.requestType} at ${wr.campus} (${dto.role})`,
+        referenceNo: wr.referenceNo, userId: dto.userId, workRequestId: id,
+      });
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
 
     await this.auditLogService.log({
@@ -354,12 +360,7 @@ if (!assignableStatuses.includes(wr.status)) {
       performedById: userId,
     });
 
-    await this.notificationsService.create({
-      title: 'You have been assigned',
-      message: `You have been assigned as ${dto.role} to work request ${wr.referenceNo}.`,
-      userId: dto.userId,
-      workRequestId: id,
-    });
+    if (assignedNotification) this.notificationsService.emit(assignedNotification, dto.userId);
 
     await this.notificationsService.create({
       title: 'Work request assigned',
@@ -392,9 +393,15 @@ if (!assignableStatuses.includes(wr.status)) {
       return this.findOne(id);
     }
 
-    await this.prisma.workRequestAssignment.update({
-      where: { id: assignmentId },
-      data: { unassignedAt: new Date() },
+    let unassignedNotification: { id: string } | undefined;
+    await this.prisma.$transaction(async tx => {
+      const changed = await tx.workRequestAssignment.updateMany({ where: { id: assignmentId, workRequestId: id, unassignedAt: null }, data: { unassignedAt: new Date() } });
+      if (changed.count !== 1) throw new ConflictException('Assignment changed concurrently.');
+      unassignedNotification = await this.notificationsService.createInTransaction(tx, {
+        type: 'WORK_REQUEST_UNASSIGNED', title: 'Work Assignment Removed',
+        message: `${wr.referenceNo}: you have been removed from this work request.`, referenceNo: wr.referenceNo,
+        userId: assignment.userId, workRequestId: id,
+      });
     });
 
     const activeAssignments = wr.assignments.filter(
@@ -415,12 +422,7 @@ if (!assignableStatuses.includes(wr.status)) {
       performedById: userId,
     });
 
-    await this.notificationsService.create({
-      title: 'You have been unassigned',
-      message: `You have been removed from work request ${wr.referenceNo}.`,
-      userId: assignment.userId,
-      workRequestId: id,
-    });
+    if (unassignedNotification) this.notificationsService.emit(unassignedNotification, assignment.userId);
 
     return this.findOne(id);
   }
@@ -616,6 +618,7 @@ if (!assignableStatuses.includes(wr.status)) {
 
     if (cannotBeRepaired) {
       await this.notificationsService.create({
+        type: 'WORK_REQUEST_CANCELLED', referenceNo: wr.referenceNo,
         title: 'Work request cancelled',
         message: `Work request ${wr.referenceNo} has been cancelled because the item cannot be repaired.`,
         userId: wr.requestedById,
@@ -623,6 +626,7 @@ if (!assignableStatuses.includes(wr.status)) {
       });
     } else {
       await this.notificationsService.create({
+        type: 'WORK_REQUEST_COMPLETED', referenceNo: wr.referenceNo,
         title: 'Work request completed',
         message: `Your work request ${wr.referenceNo} has been completed.`,
         userId: wr.requestedById,
@@ -639,25 +643,18 @@ if (!assignableStatuses.includes(wr.status)) {
       throw new BadRequestException('Work request cannot be cancelled.');
     }
 
-    await this.prisma.workRequest.update({
-      where: { id },
-      data: { status: RequestStatus.CANCELLED, isActive: false },
-    });
-
-    await this.auditLogService.log({
-      action: 'CANCEL',
-      entityType: 'WorkRequest',
-      entityId: id,
-      description: `Work request ${wr.referenceNo} cancelled`,
-      performedById: userId,
-    });
-
-    await this.notificationsService.create({
-      title: 'Work request cancelled',
-      message: `Your work request ${wr.referenceNo} has been cancelled.`,
-      userId: wr.requestedById,
-      workRequestId: id,
-    });
+    let notifications: { id: string; userId: string }[] = [];
+    await this.prisma.$transaction(async tx => {
+      const changed = await tx.workRequest.updateMany({ where: { id, status: { in: [RequestStatus.PENDING, RequestStatus.ASSIGNED, RequestStatus.IN_PROGRESS] } }, data: { status: RequestStatus.CANCELLED, isActive: false } });
+      if (changed.count !== 1) throw new ConflictException('Work request was cancelled concurrently.');
+      const recipients = new Set([wr.requestedById, ...wr.assignments.filter(a => !a.unassignedAt).map(a => a.userId)]);
+      notifications = await Promise.all([...recipients].map(recipientId => this.notificationsService.createInTransaction(tx, {
+        type: 'WORK_REQUEST_CANCELLED', referenceNo: wr.referenceNo, title: 'Work request cancelled',
+        message: `Work request ${wr.referenceNo} has been cancelled.`, userId: recipientId, workRequestId: id,
+      })));
+      await this.auditLogService.log({ action: 'CANCEL', entityType: 'WorkRequest', entityId: id, description: `Work request ${wr.referenceNo} cancelled`, performedById: userId }, tx);
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+    for (const notification of notifications) this.notificationsService.emit(notification, notification.userId);
 
     return { message: 'Work request cancelled.' };
   }

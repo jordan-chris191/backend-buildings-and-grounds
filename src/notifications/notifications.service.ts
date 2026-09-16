@@ -5,6 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { Prisma } from '@prisma/client';
 import { BorrowRequestsGateway } from '../gateway/borrow-requests.gateway';
 
 @Injectable()
@@ -20,6 +21,8 @@ export class NotificationsService {
     message: string;
     userId: string;
     workRequestId?: string;
+    type?: string;
+    referenceNo?: string;
   }) {
     const notification = await this.prisma.notification.create({
       data: {
@@ -27,6 +30,8 @@ export class NotificationsService {
         message: data.message,
         userId: data.userId,
         workRequestId: data.workRequestId,
+        type: data.type,
+        referenceNo: data.referenceNo,
       },
     });
 
@@ -34,6 +39,18 @@ export class NotificationsService {
     this.gateway.notifyNewNotification(data.userId, notification);
 
     return notification;
+  }
+
+  /** Persist with the caller's domain transaction; realtime delivery belongs
+   * after that transaction commits. */
+  createInTransaction(tx: Prisma.TransactionClient, data: {
+    title: string; message: string; userId: string; workRequestId?: string; type?: string; referenceNo?: string;
+  }) {
+    return tx.notification.create({ data });
+  }
+
+  emit(notification: unknown, userId: string) {
+    this.gateway.notifyNewNotification(userId, notification);
   }
 
   /** Get all notifications for the logged‑in user */

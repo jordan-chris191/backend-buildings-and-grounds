@@ -3,7 +3,8 @@ import {
   Injectable,
   UnauthorizedException,
   ForbiddenException,
-  NotFoundException
+  NotFoundException,
+  BadRequestException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { PrismaService } from '../prisma/prisma.service';
@@ -340,6 +341,7 @@ export class AuthService {
       roleId: string;
       positionId?: string;
       officeId?: string;
+      personId?: string;
     },
     performedById: string,
   ) {
@@ -348,11 +350,18 @@ export class AuthService {
       throw new ForbiddenException('A user with this email already exists');
     }
 
-    if (dto.officeId) {
-      const office = await this.prisma.office.findUnique({ where: { id: dto.officeId } });
-      if (!office) {
-        throw new NotFoundException('Office not found');
-      }
+    const [role, office, position, person] = await Promise.all([
+      this.prisma.role.findUnique({ where: { id: dto.roleId } }),
+      dto.officeId ? this.prisma.office.findUnique({ where: { id: dto.officeId } }) : null,
+      dto.positionId ? this.prisma.position.findUnique({ where: { id: dto.positionId } }) : null,
+      dto.personId ? this.prisma.person.findUnique({ where: { id: dto.personId } }) : null,
+    ]);
+    if (!role?.isActive) throw new BadRequestException('Role must exist and be active');
+    if (dto.officeId && !office?.isActive) throw new BadRequestException('Office must exist and be active');
+    if (dto.positionId && !position?.isActive) throw new BadRequestException('Position must exist and be active');
+    if (dto.personId && !person?.isActive) throw new BadRequestException('Person must exist and be active');
+    if (dto.personId && await this.prisma.user.findUnique({ where: { personId: dto.personId } })) {
+      throw new ForbiddenException('Person is already linked to another user account');
     }
 
     const defaultPassword = 'staff@123';
@@ -366,9 +375,10 @@ export class AuthService {
         roleId: dto.roleId,
         positionId: dto.positionId,
         officeId: dto.officeId,
+        personId: dto.personId,
         passwordHash,
       },
-      include: { role: true, position: true, office: true },
+      include: { role: true, position: true, office: true, person: true },
     });
 
     await this.auditLogService.log({
@@ -389,6 +399,7 @@ export class AuthService {
         role: user.role.name,
         position: user.position?.name ?? null,
         office: user.office?.name ?? null,
+        personId: user.personId,
       },
     };
   }

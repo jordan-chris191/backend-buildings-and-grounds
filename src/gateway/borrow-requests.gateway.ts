@@ -6,6 +6,8 @@ import {
   OnGatewayDisconnect,
 } from '@nestjs/websockets';
 import { Server, Socket } from 'socket.io';
+import { JwtService } from '@nestjs/jwt';
+import { PrismaService } from '../prisma/prisma.service';
 
 @WebSocketGateway({
   cors: {
@@ -14,27 +16,37 @@ import { Server, Socket } from 'socket.io';
   namespace: '/borrow-requests',
 })
 export class BorrowRequestsGateway implements OnGatewayConnection, OnGatewayDisconnect {
+  constructor(private readonly jwt: JwtService, private readonly prisma: PrismaService) {}
   @WebSocketServer()
   server: Server;
 
-  private connectedClients: Map<string, string> = new Map(); // userId -> socketId
+  private connectedClients: Map<string, Set<string>> = new Map();
 
-  handleConnection(client: Socket) {
-    const userId = client.handshake.auth.userId;
-    if (userId) {
-      this.connectedClients.set(userId, client.id);
-      console.log(`✅ User ${userId} connected (socket: ${client.id})`);
+  async handleConnection(client: Socket) {
+    const rawToken = client.handshake.auth?.token;
+    const token = typeof rawToken === 'string' ? rawToken.replace(/^Bearer\s+/i, '') : '';
+    try {
+      if (!token) throw new Error('missing access token');
+      const payload = await this.jwt.verifyAsync<{ sub: string; role: string }>(token, { secret: process.env.JWT_ACCESS_SECRET });
+      const user = await this.prisma.user.findUnique({ where: { id: payload.sub }, select: { id: true, isActive: true } });
+      if (!user?.isActive) throw new Error('inactive user');
+      client.data.userId = user.id;
+      client.join(`user:${user.id}`);
+      const sockets = this.connectedClients.get(user.id) ?? new Set<string>();
+      sockets.add(client.id);
+      this.connectedClients.set(user.id, sockets);
+    } catch {
+      client.emit('connect_error', { message: 'Unauthorized socket connection' });
+      client.disconnect(true);
     }
   }
 
   handleDisconnect(client: Socket) {
-    for (const [userId, socketId] of this.connectedClients.entries()) {
-      if (socketId === client.id) {
-        this.connectedClients.delete(userId);
-        console.log(`❌ User ${userId} disconnected`);
-        break;
-      }
-    }
+    const userId = client.data.userId as string | undefined;
+    if (!userId) return;
+    const sockets = this.connectedClients.get(userId);
+    sockets?.delete(client.id);
+    if (sockets?.size === 0) this.connectedClients.delete(userId);
   }
 
   // ✅ Notify a specific user about their borrow request update
@@ -43,9 +55,8 @@ export class BorrowRequestsGateway implements OnGatewayConnection, OnGatewayDisc
     status: string;
     message: string;
   }) {
-    const socketId = this.connectedClients.get(userId);
-    if (socketId) {
-      this.server.to(socketId).emit('borrow-request-update', data);
+    if (this.connectedClients.has(userId)) {
+      this.server.to(`user:${userId}`).emit('borrow-request-update', data);
       console.log(`📩 Sent notification to user ${userId}`);
     } else {
       console.log(`⚠️ User ${userId} not connected`);
@@ -53,12 +64,15 @@ export class BorrowRequestsGateway implements OnGatewayConnection, OnGatewayDisc
   }
 
   // Notify a user about a brand‑new notification record
-notifyNewNotification(userId: string, notification: any) {
-  const socketId = this.connectedClients.get(userId);
-  if (socketId) {
-    this.server.to(socketId).emit('notification', notification);
+  notifyNewNotification(userId: string, notification: any) {
+    if (!this.connectedClients.has(userId)) return;
+    this.server.to(`user:${userId}`).emit('notification', {
+      id: notification.id, type: notification.type, title: notification.title,
+      message: notification.message, referenceNo: notification.referenceNo,
+      workRequestId: notification.workRequestId, createdAt: notification.createdAt,
+      isRead: notification.isRead,
+    });
   }
-}
 
   // ✅ Broadcast to all connected users (for admin announcements)
   broadcastToAll(event: string, data: any) {
