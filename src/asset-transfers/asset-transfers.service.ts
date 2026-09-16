@@ -41,6 +41,10 @@ export class AssetTransfersService {
   async createBatch(userId: string, dto: CreateAssetTransferBatchDto) {
     if (!dto.items?.length) throw new BadRequestException('At least one item is required.');
     const { sourceCampus, destinationCampus } = this.campuses(dto);
+    if (dto.newHolderId) {
+      const holder = await this.prisma.person.findUnique({ where: { id: dto.newHolderId } });
+      if (!holder?.isActive) throw new BadRequestException('New holder must exist and be active.');
+    }
     const ids = dto.items.map(item => item.inventoryItemId);
     if (new Set(ids).size !== ids.length) throw new ConflictException('A transfer batch cannot contain duplicate inventory items.');
     const batch = await this.prisma.$transaction(async tx => {

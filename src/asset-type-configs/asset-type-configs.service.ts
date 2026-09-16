@@ -33,8 +33,8 @@ export class AssetTypeConfigsService {
     const position = await this.prisma.position.findUnique({
       where: { id: dto.positionId },
     });
-    if (!position) {
-      throw new BadRequestException('Position not found.');
+    if (!position?.isActive) {
+      throw new BadRequestException('Position must exist and be active.');
     }
 
     const config = await this.prisma.assetTypeConfig.create({
@@ -83,8 +83,8 @@ export class AssetTypeConfigsService {
       const position = await this.prisma.position.findUnique({
         where: { id: dto.positionId },
       });
-      if (!position) {
-        throw new BadRequestException('Position not found.');
+      if (!position?.isActive) {
+        throw new BadRequestException('Position must exist and be active.');
       }
     }
 

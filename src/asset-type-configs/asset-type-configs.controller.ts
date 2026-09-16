@@ -20,7 +20,7 @@ export class AssetTypeConfigsController {
   constructor(private readonly assetTypeConfigsService: AssetTypeConfigsService) {}
 
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('Administrator')
+  @Roles('ADMINISTRATOR')
   @Post()
   create(@Req() req, @Body() dto: CreateAssetTypeConfigDto) {
     return this.assetTypeConfigsService.create(req.user.userId, dto);
@@ -39,14 +39,14 @@ export class AssetTypeConfigsController {
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('Administrator')
+  @Roles('ADMINISTRATOR')
   @Patch(':id')
   update(@Param('id') id: string, @Req() req, @Body() dto: UpdateAssetTypeConfigDto) {
     return this.assetTypeConfigsService.update(id, req.user.userId, dto);
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('Administrator')
+  @Roles('ADMINISTRATOR')
   @Patch(':id/deactivate')
   deactivate(@Param('id') id: string, @Req() req) {
     return this.assetTypeConfigsService.deactivate(id, req.user.userId);

@@ -138,7 +138,7 @@ describe('BorrowRequestsService Phase 1 invariants', () => {
     };
     jest.spyOn(service, 'findOne').mockResolvedValue(approved);
 
-    await service.markReturned('borrow-1', 'custodian-1', 'Property Custodian');
+    await service.markReturned('borrow-1', 'custodian-1', 'PROPERTY_CUSTODIAN');
     expect(tx.borrowRequest.updateMany).toHaveBeenCalled();
   });
 

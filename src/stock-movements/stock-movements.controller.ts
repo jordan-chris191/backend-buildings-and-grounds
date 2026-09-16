@@ -22,7 +22,7 @@ export class StockMovementsController {
 
   @Post()
   @UseGuards(RolesGuard)
-  @Roles('Administrator', 'Building & Grounds Officer', 'Property Custodian')
+  @Roles('ADMINISTRATOR', 'BUILDING_GROUNDS_OFFICER', 'PROPERTY_CUSTODIAN')
   create(@Req() req, @Body() dto: CreateStockMovementDto) {
     return this.stockMovementsService.create(req.user.userId, dto);
   }

@@ -64,8 +64,8 @@ export class TransactionsService {
       const person = await this.prisma.person.findUnique({
         where: { id: dto.personId },
       });
-      if (!person) {
-        throw new BadRequestException('Person not found.');
+      if (!person?.isActive) {
+        throw new BadRequestException('Person must exist and be active.');
       }
     }
 

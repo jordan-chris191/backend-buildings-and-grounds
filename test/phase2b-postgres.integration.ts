@@ -11,7 +11,7 @@ async function fails(action: () => Promise<unknown>) { try { await action(); } c
 
 async function main() {
   await prisma.$connect();
-  const role = await prisma.role.upsert({ where: { name: 'phase2b-test-role' }, update: {}, create: { name: 'phase2b-test-role' } });
+  const role = await prisma.role.upsert({ where: { name: 'phase2b-test-role' }, update: {}, create: { code: 'PHASE2B_TEST_ROLE', name: 'phase2b-test-role' } });
   const user = await prisma.user.upsert({ where: { email: 'phase2b-test@example.invalid' }, update: {}, create: { email: 'phase2b-test@example.invalid', passwordHash: 'x', firstName: 'Phase', lastName: 'Transfer', roleId: role.id } });
   const service = new AssetTransfersService(prisma, { log: () => Promise.resolve() } as any, ledger);
   const item = await prisma.inventoryItem.create({ data: { name: `phase2b-${Date.now()}`, type: ItemType.CONSUMABLE, campus: Campus.PAMPLONA, quantity: new Prisma.Decimal(999) } });

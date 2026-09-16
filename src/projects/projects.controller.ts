@@ -13,7 +13,7 @@ import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
 
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Roles('Administrator', 'Building & Grounds Officer')
+@Roles('ADMINISTRATOR', 'BUILDING_GROUNDS_OFFICER')
 @Controller('projects')
 export class ProjectsController {
   constructor(private projectsService: ProjectsService) {}

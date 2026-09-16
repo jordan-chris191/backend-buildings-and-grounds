@@ -23,7 +23,7 @@ export class MaintainableAssetProfilesController {
   ) {}
 
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('Administrator', 'Building & Grounds Officer')
+  @Roles('ADMINISTRATOR', 'BUILDING_GROUNDS_OFFICER')
   @Post()
   create(@Req() req, @Body() dto: CreateMaintainableAssetProfileDto) {
     return this.maintainableAssetProfilesService.create(req.user.userId, dto);
@@ -49,7 +49,7 @@ export class MaintainableAssetProfilesController {
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('Administrator', 'Building & Grounds Officer')
+  @Roles('ADMINISTRATOR', 'BUILDING_GROUNDS_OFFICER')
   @Patch(':id')
   update(
     @Param('id') id: string,
@@ -60,9 +60,9 @@ export class MaintainableAssetProfilesController {
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('Administrator', 'Building & Grounds Officer')
+  @Roles('ADMINISTRATOR', 'BUILDING_GROUNDS_OFFICER')
   @Patch(':id/deactivate')
   deactivate(@Param('id') id: string, @Req() req) {
     return this.maintainableAssetProfilesService.deactivate(id, req.user.userId);
   }
-}   
+}

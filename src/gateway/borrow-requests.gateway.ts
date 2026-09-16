@@ -27,9 +27,9 @@ export class BorrowRequestsGateway implements OnGatewayConnection, OnGatewayDisc
     const token = typeof rawToken === 'string' ? rawToken.replace(/^Bearer\s+/i, '') : '';
     try {
       if (!token) throw new Error('missing access token');
-      const payload = await this.jwt.verifyAsync<{ sub: string; role: string }>(token, { secret: process.env.JWT_ACCESS_SECRET });
-      const user = await this.prisma.user.findUnique({ where: { id: payload.sub }, select: { id: true, isActive: true } });
-      if (!user?.isActive) throw new Error('inactive user');
+      const payload = await this.jwt.verifyAsync<{ sub: string; ver?: number }>(token, { secret: process.env.JWT_ACCESS_SECRET });
+      const user = await this.prisma.user.findUnique({ where: { id: payload.sub }, select: { id: true, isActive: true, authVersion: true, role: { select: { isActive: true } } } });
+      if (!user?.isActive || !user.role.isActive || payload.ver !== user.authVersion) throw new Error('inactive or stale user');
       client.data.userId = user.id;
       client.join(`user:${user.id}`);
       const sockets = this.connectedClients.get(user.id) ?? new Set<string>();
@@ -47,6 +47,16 @@ export class BorrowRequestsGateway implements OnGatewayConnection, OnGatewayDisc
     const sockets = this.connectedClients.get(userId);
     sockets?.delete(client.id);
     if (sockets?.size === 0) this.connectedClients.delete(userId);
+  }
+
+  /** Force-close all live sessions for an identity after authorization changes. */
+  disconnectUser(userId: string) {
+    const socketIds = this.connectedClients.get(userId);
+    if (!socketIds) return;
+    for (const socketId of socketIds) {
+      this.server?.sockets.sockets.get(socketId)?.disconnect(true);
+    }
+    this.connectedClients.delete(userId);
   }
 
   // ✅ Notify a specific user about their borrow request update

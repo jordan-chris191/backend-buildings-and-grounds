@@ -9,6 +9,8 @@ import {
 import { JwtService } from '@nestjs/jwt';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditLogService } from '../audit-log/audit-log.service';
+import { BorrowRequestsGateway } from '../gateway/borrow-requests.gateway';
+import { ROLE_CODES } from './role-codes';
 import * as bcrypt from 'bcrypt';
 import * as crypto from 'crypto';
 
@@ -34,7 +36,7 @@ const SAFE_USER_SELECT = {
   firstName: true,
   lastName: true,
   isActive: true,
-  role: { select: { id: true, name: true } },
+  role: { select: { id: true, code: true, name: true } },
   position: { select: { id: true, name: true } },
   office: { select: { id: true, name: true, campus: true } },
 } as const;
@@ -46,6 +48,7 @@ export class AuthService {
     private jwtService: JwtService,
     private emailService: EmailService,
     private auditLogService: AuditLogService,
+    private readonly gateway: BorrowRequestsGateway,
   ) {}
 
   // ---------------------------------------------------------
@@ -57,7 +60,7 @@ export class AuthService {
       include: { role: true, office: true },
     });
 
-    if (!user || !user.isActive) {
+    if (!user || !user.isActive || !user.role.isActive) {
       throw new UnauthorizedException('Invalid credentials');
     }
 
@@ -86,8 +89,8 @@ export class AuthService {
       },
     });
 
-    const accessToken = this.generateAccessToken(user.id, user.role.name);
-    const refreshToken = await this.generateRefreshToken(user.id);
+    const accessToken = this.generateAccessToken(user.id, user.role.code, user.authVersion);
+    const refreshToken = await this.generateRefreshToken(user.id, user.authVersion);
 
     return {
       accessToken,
@@ -125,9 +128,9 @@ export class AuthService {
   // ---------------------------------------------------------
   // TOKEN GENERATION
   // ---------------------------------------------------------
-  private generateAccessToken(userId: string, role: string) {
+  private generateAccessToken(userId: string, roleCode: string, authVersion: number) {
     return this.jwtService.sign(
-      { sub: userId, role },
+      { sub: userId, role: roleCode, ver: authVersion },
       {
         secret: process.env.JWT_ACCESS_SECRET,
         expiresIn: process.env.JWT_ACCESS_EXPIRES_IN ?? '15m' as any,
@@ -135,7 +138,7 @@ export class AuthService {
     );
   }
 
-  private async generateRefreshToken(userId: string) {
+  private async generateRefreshToken(userId: string, authVersion: number) {
     const rawToken = crypto.randomBytes(64).toString('hex');
     const tokenHash = this.hashToken(rawToken);
 
@@ -147,6 +150,7 @@ export class AuthService {
       data: {
         tokenHash,
         userId,
+        authVersion,
         expiresAt,
       },
     });
@@ -177,8 +181,8 @@ export class AuthService {
       throw new UnauthorizedException('Invalid or expired refresh token');
     }
 
-    if (!storedToken.user.isActive) {
-      throw new UnauthorizedException('Account is inactive');
+    if (!storedToken.user.isActive || !storedToken.user.role.isActive || storedToken.authVersion !== storedToken.user.authVersion) {
+      throw new UnauthorizedException('Account is inactive or authorization has changed');
     }
 
     await this.prisma.refreshToken.update({
@@ -188,10 +192,11 @@ export class AuthService {
 
     const newAccessToken = this.generateAccessToken(
       storedToken.user.id,
-      storedToken.user.role.name,
+      storedToken.user.role.code, storedToken.user.authVersion,
     );
     const newRefreshToken = await this.generateRefreshToken(
       storedToken.user.id,
+      storedToken.user.authVersion,
     );
 
     return {
@@ -282,6 +287,7 @@ export class AuthService {
           passwordHash: newPasswordHash,
           failedLoginAttempts: 0,
           lockedUntil: null,
+          authVersion: { increment: 1 },
         },
       }),
       this.prisma.passwordResetToken.update({
@@ -295,6 +301,8 @@ export class AuthService {
         data: { revokedAt: new Date() },
       }),
     ]);
+
+    this.gateway.disconnectUser(storedToken.userId);
 
     return { message: 'Password reset successfully' };
   }
@@ -315,7 +323,7 @@ export class AuthService {
           select: { id: true, name: true },
         },
         role: {
-          select: { id: true, name: true },
+          select: { id: true, code: true, name: true },
         },
         office: {
           select: { id: true, name: true, campus: true },
@@ -439,9 +447,9 @@ export class AuthService {
     }
 
     // Safeguard: prevent removing the last active Administrator
-    if (user.role.name === 'Administrator') {
+    if (user.role.code === ROLE_CODES.ADMINISTRATOR) {
       const activeAdminCount = await this.prisma.user.count({
-        where: { isActive: true, role: { name: 'Administrator' } },
+        where: { isActive: true, role: { code: ROLE_CODES.ADMINISTRATOR } },
       });
       if (activeAdminCount <= 1) {
         throw new ForbiddenException(
@@ -451,13 +459,13 @@ export class AuthService {
     }
 
     const newRole = await this.prisma.role.findUnique({ where: { id: newRoleId } });
-    if (!newRole) {
-      throw new NotFoundException('Role not found');
+    if (!newRole?.isActive) {
+      throw new BadRequestException('Role must exist and be active');
     }
 
     const updated = await this.prisma.user.update({
       where: { id: userId },
-      data: { roleId: newRoleId },
+      data: { roleId: newRoleId, authVersion: { increment: 1 } },
       select: SAFE_USER_SELECT,
     });
 
@@ -468,6 +476,7 @@ export class AuthService {
       description: `Changed ${user.email}'s role from ${user.role.name} to ${newRole.name}`,
       performedById,
     });
+    this.gateway.disconnectUser(userId);
 
     return updated;
   }
@@ -483,8 +492,8 @@ export class AuthService {
 
     if (officeId) {
       const office = await this.prisma.office.findUnique({ where: { id: officeId } });
-      if (!office) {
-        throw new NotFoundException('Office not found');
+      if (!office?.isActive) {
+        throw new BadRequestException('Office must exist and be active');
       }
     }
 
@@ -519,9 +528,9 @@ export class AuthService {
       throw new NotFoundException('User not found');
     }
 
-    if (user.role.name === 'Administrator') {
+    if (user.role.code === ROLE_CODES.ADMINISTRATOR) {
       const activeAdminCount = await this.prisma.user.count({
-        where: { isActive: true, role: { name: 'Administrator' } },
+        where: { isActive: true, role: { code: ROLE_CODES.ADMINISTRATOR } },
       });
       if (activeAdminCount <= 1) {
         throw new ForbiddenException(
@@ -532,7 +541,7 @@ export class AuthService {
 
     const updated = await this.prisma.user.update({
       where: { id: userId },
-      data: { isActive: false },
+      data: { isActive: false, authVersion: { increment: 1 } },
       select: SAFE_USER_SELECT,
     });
 
@@ -541,6 +550,7 @@ export class AuthService {
       where: { userId, revokedAt: null },
       data: { revokedAt: new Date() },
     });
+    this.gateway.disconnectUser(userId);
 
     await this.auditLogService.log({
       action: 'DEACTIVATE',
@@ -568,6 +578,7 @@ export class AuthService {
         isActive: true,
         failedLoginAttempts: 0,
         lockedUntil: null,
+        authVersion: { increment: 1 },
       },
       select: SAFE_USER_SELECT,
     });
@@ -606,7 +617,7 @@ export class AuthService {
   await this.prisma.$transaction([
     this.prisma.user.update({
       where: { id: userId },
-      data: { passwordHash: newHash },
+      data: { passwordHash: newHash, authVersion: { increment: 1 } },
     }),
     // Revoke all refresh tokens – user must re-login with the new password
     this.prisma.refreshToken.updateMany({
@@ -614,6 +625,7 @@ export class AuthService {
       data: { revokedAt: new Date() },
     }),
   ]);
+  this.gateway.disconnectUser(userId);
 
   await this.auditLogService.log({
     action: 'CHANGE_PASSWORD',

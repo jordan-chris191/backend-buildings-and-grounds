@@ -22,7 +22,7 @@ export class OfficesController {
   constructor(private readonly officesService: OfficesService) {}
 
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('Administrator')
+  @Roles('ADMINISTRATOR')
   @Post()
   create(@Body() dto: CreateOfficeDto) {
     return this.officesService.create(dto);
@@ -41,14 +41,14 @@ export class OfficesController {
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('Administrator')
+  @Roles('ADMINISTRATOR')
   @Patch(':id')
   update(@Param('id') id: string, @Body() dto: UpdateOfficeDto) {
     return this.officesService.update(id, dto);
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('Administrator')
+  @Roles('ADMINISTRATOR')
   @Delete(':id')
   remove(@Param('id') id: string) {
     return this.officesService.remove(id);

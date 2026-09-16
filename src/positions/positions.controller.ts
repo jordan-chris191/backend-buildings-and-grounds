@@ -35,14 +35,14 @@ export class PositionsController {
 
   @Post()
   @UseGuards(RolesGuard)
-  @Roles('Administrator')
+  @Roles('ADMINISTRATOR')
   create(@Body() dto: CreatePositionDto) {
     return this.positionsService.create(dto);
   }
 
   @Patch(':id')
   @UseGuards(RolesGuard)
-  @Roles('Administrator')
+  @Roles('ADMINISTRATOR')
   update(
     @Param('id') id: string,
     @Body() dto: UpdatePositionDto,
@@ -52,7 +52,7 @@ export class PositionsController {
 
   @Delete(':id')
   @UseGuards(RolesGuard)
-  @Roles('Administrator')
+  @Roles('ADMINISTRATOR')
   remove(@Param('id') id: string) {
     return this.positionsService.remove(id);
   }

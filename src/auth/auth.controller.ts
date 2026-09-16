@@ -58,20 +58,20 @@ export class AuthController {
   }
 
   @UseGuards(JwtAuthGuard)
-  @Post('me')
+  @Get('me')
   getProfile(@Req() req) {
     return this.authService.getProfile(req.user.userId);
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('Administrator')
+  @Roles('ADMINISTRATOR')
   @Post('users')
   createUser(@Body() dto: CreateUserDto, @Req() req) {
     return this.authService.createUser(dto, req.user.userId);
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('Administrator', 'Building & Grounds Officer')
+  @Roles('ADMINISTRATOR', 'BUILDING_GROUNDS_OFFICER')
   @Get('users')
   findUsers(
     @Query('positionId') positionId?: string,
@@ -83,28 +83,28 @@ export class AuthController {
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('Administrator')
+  @Roles('ADMINISTRATOR')
   @Patch('users/:id/role')
   changeRole(@Param('id') id: string, @Body() dto: ChangeRoleDto, @Req() req) {
     return this.authService.changeRole(id, dto.roleId, req.user.userId);
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('Administrator')
+  @Roles('ADMINISTRATOR')
   @Patch('users/:id/office')
   changeOffice(@Param('id') id: string, @Body() dto: ChangeOfficeDto, @Req() req) {
     return this.authService.changeOffice(id, dto.officeId, req.user.userId);
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('Administrator')
+  @Roles('ADMINISTRATOR')
   @Patch('users/:id/deactivate')
   deactivateUser(@Param('id') id: string, @Req() req) {
     return this.authService.deactivateUser(id, req.user.userId);
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('Administrator')
+  @Roles('ADMINISTRATOR')
   @Patch('users/:id/reactivate')
   reactivateUser(@Param('id') id: string, @Req() req) {
     return this.authService.reactivateUser(id, req.user.userId);

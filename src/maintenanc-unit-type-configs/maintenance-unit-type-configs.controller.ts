@@ -22,7 +22,7 @@ export class MaintenanceUnitTypeConfigsController {
   ) {}
 
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('Administrator', 'Building & Grounds Officer')
+  @Roles('ADMINISTRATOR', 'BUILDING_GROUNDS_OFFICER')
   @Post()
   create(@Req() req, @Body() dto: CreateMaintenanceUnitTypeConfigDto) {
     return this.maintenanceUnitTypeConfigsService.create(req.user.userId, dto);
@@ -41,7 +41,7 @@ export class MaintenanceUnitTypeConfigsController {
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('Administrator', 'Building & Grounds Officer')
+  @Roles('ADMINISTRATOR', 'BUILDING_GROUNDS_OFFICER')
   @Patch(':id')
   update(
     @Param('id') id: string,
@@ -52,7 +52,7 @@ export class MaintenanceUnitTypeConfigsController {
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('Administrator', 'Building & Grounds Officer')
+  @Roles('ADMINISTRATOR', 'BUILDING_GROUNDS_OFFICER')
   @Patch(':id/deactivate')
   deactivate(@Param('id') id: string, @Req() req) {
     return this.maintenanceUnitTypeConfigsService.deactivate(id, req.user.userId);

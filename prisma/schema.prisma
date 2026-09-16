@@ -9,6 +9,7 @@ datasource db {
 
 model Role {
   id          String   @id @default(uuid())
+  code        String   @unique
   name        String   @unique
   description String?
   createdAt   DateTime @default(now())
@@ -27,6 +28,7 @@ model User {
   lastLoginAt                 DateTime?
   failedLoginAttempts         Int                         @default(0)
   lockedUntil                 DateTime?
+  authVersion                 Int                         @default(0)
   createdAt                   DateTime                    @default(now())
   updatedAt                   DateTime                    @updatedAt
   roleId                      String
@@ -65,13 +67,14 @@ model User {
 }
 
 model RefreshToken {
-  id        String    @id @default(uuid())
-  tokenHash String    @unique
-  expiresAt DateTime
-  revokedAt DateTime?
-  createdAt DateTime  @default(now())
-  userId    String
-  user      User      @relation("UserRefreshTokens", fields: [userId], references: [id], onDelete: Cascade)
+  id          String    @id @default(uuid())
+  tokenHash   String    @unique
+  authVersion Int       @default(0)
+  expiresAt   DateTime
+  revokedAt   DateTime?
+  createdAt   DateTime  @default(now())
+  userId      String
+  user        User      @relation("UserRefreshTokens", fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
   @@index([expiresAt])

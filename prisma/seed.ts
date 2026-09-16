@@ -11,33 +11,33 @@ async function main() {
   // =========================
 
   const administrator = await prisma.role.upsert({
-    where: { name: 'Administrator' },
-    update: {},
-    create: { name: 'Administrator' },
+    where: { code: 'ADMINISTRATOR' },
+    update: { name: 'Administrator', isActive: true },
+    create: { code: 'ADMINISTRATOR', name: 'Administrator' },
   });
 
   await prisma.role.upsert({
-    where: { name: 'Building & Grounds Officer' },
-    update: {},
-    create: { name: 'Building & Grounds Officer' },
+    where: { code: 'BUILDING_GROUNDS_OFFICER' },
+    update: { name: 'Building & Grounds Officer', isActive: true },
+    create: { code: 'BUILDING_GROUNDS_OFFICER', name: 'Building & Grounds Officer' },
   });
 
   await prisma.role.upsert({
-    where: { name: 'Campus Staff' },
-    update: {},
-    create: { name: 'Campus Staff' },
+    where: { code: 'CAMPUS_STAFF' },
+    update: { name: 'Campus Staff', isActive: true },
+    create: { code: 'CAMPUS_STAFF', name: 'Campus Staff' },
   });
 
   await prisma.role.upsert({
-    where: { name: 'Property Custodian' },
-    update: {},
-    create: { name: 'Property Custodian' },
+    where: { code: 'PROPERTY_CUSTODIAN' },
+    update: { name: 'Property Custodian', isActive: true },
+    create: { code: 'PROPERTY_CUSTODIAN', name: 'Property Custodian' },
   });
 
   await prisma.role.upsert({
-    where: { name: 'Faculty' },
-    update: {},
-    create: { name: 'Faculty' },
+    where: { code: 'FACULTY' },
+    update: { name: 'Faculty', isActive: true },
+    create: { code: 'FACULTY', name: 'Faculty' },
   });
 
   // =========================

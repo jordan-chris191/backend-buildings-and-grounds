@@ -35,7 +35,7 @@ async function createBalances(itemId: string, mc1Quantity: number, mc1Reserved: 
 
 async function main() {
   await prisma.$connect();
-  const role = await prisma.role.upsert({ where: { name: 'phase2a-test-role' }, update: {}, create: { name: 'phase2a-test-role' } });
+  const role = await prisma.role.upsert({ where: { name: 'phase2a-test-role' }, update: {}, create: { code: 'PHASE2A_TEST_ROLE', name: 'phase2a-test-role' } });
   const user = await prisma.user.upsert({ where: { email: 'phase2a-test@example.invalid' }, update: {}, create: { email: 'phase2a-test@example.invalid', passwordHash: 'x', firstName: 'Phase', lastName: 'Test', roleId: role.id } });
   const auditEvents: any[] = [];
   const audit: any = { log(data: any) { auditEvents.push(data); return Promise.resolve(); } };

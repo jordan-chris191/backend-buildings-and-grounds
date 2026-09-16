@@ -20,7 +20,7 @@ import { Roles } from '../auth/decorators/roles.decorator';
 export class RolesController {
   constructor(private readonly rolesService: RolesService) {}
 
-  @Roles('Administrator')
+  @Roles('ADMINISTRATOR')
   @Post()
   create(@Body() dto: CreateRoleDto) {
     return this.rolesService.create(dto);
@@ -36,13 +36,13 @@ export class RolesController {
     return this.rolesService.findOne(id);
   }
 
-  @Roles('Administrator')
+  @Roles('ADMINISTRATOR')
   @Patch(':id')
   update(@Param('id') id: string, @Body() dto: UpdateRoleDto) {
     return this.rolesService.update(id, dto);
   }
 
-  @Roles('Administrator')
+  @Roles('ADMINISTRATOR')
   @Delete(':id')
   remove(@Param('id') id: string) {
     return this.rolesService.remove(id);

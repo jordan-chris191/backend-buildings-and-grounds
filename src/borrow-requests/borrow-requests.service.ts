@@ -23,9 +23,9 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { InventoryLedgerService } from '../stock-movements/inventory-ledger.service';
 
 const BORROW_RETURN_PRIVILEGED_ROLES = [
-  'Administrator',
-  'Building & Grounds Officer',
-  'Property Custodian',
+  'ADMINISTRATOR',
+  'BUILDING_GROUNDS_OFFICER',
+  'PROPERTY_CUSTODIAN',
 ];
 
 @Injectable()

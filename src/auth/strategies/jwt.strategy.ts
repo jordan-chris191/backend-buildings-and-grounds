@@ -1,11 +1,12 @@
 // src/auth/strategies/jwt.strategy.ts
-import { Injectable } from '@nestjs/common';
+import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
+import { PrismaService } from '../../prisma/prisma.service';
 
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
-  constructor() {
+  constructor(private readonly prisma: PrismaService) {
     const secret = process.env.JWT_ACCESS_SECRET;
 
     if (!secret) {
@@ -21,7 +22,11 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     });
   }
 
-  async validate(payload: { sub: string; role: string }) {
-    return { userId: payload.sub, role: payload.role };
+  async validate(payload: { sub: string; ver?: number }) {
+    const user = await this.prisma.user.findUnique({ where: { id: payload.sub }, include: { role: true } });
+    if (!user?.isActive || !user.role?.isActive || payload.ver !== user.authVersion) {
+      throw new UnauthorizedException('Token is no longer valid.');
+    }
+    return { userId: user.id, role: user.role.code };
   }
 }

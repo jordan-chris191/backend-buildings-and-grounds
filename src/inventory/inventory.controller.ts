@@ -25,7 +25,7 @@ export class InventoryController {
   constructor(private inventoryService: InventoryService) {}
 
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('Administrator', 'Building & Grounds Officer')
+  @Roles('ADMINISTRATOR', 'BUILDING_GROUNDS_OFFICER')
   @Post()
   create(@Req() req, @Body() dto: CreateInventoryItemDto) {
     return this.inventoryService.create(req.user.userId, dto);
@@ -62,7 +62,7 @@ export class InventoryController {
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('Administrator', 'Building & Grounds Officer')
+  @Roles('ADMINISTRATOR', 'BUILDING_GROUNDS_OFFICER')
   @Patch(':id')
   update(
     @Param('id') id: string,
@@ -73,7 +73,7 @@ export class InventoryController {
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('Administrator', 'Building & Grounds Officer')
+  @Roles('ADMINISTRATOR', 'BUILDING_GROUNDS_OFFICER')
   @Patch(':id/adjust')
   adjust(
     @Param('id') id: string,
@@ -89,14 +89,14 @@ export class InventoryController {
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('Administrator')
+  @Roles('ADMINISTRATOR')
   @Delete(':id')
   remove(@Param('id') id: string, @Req() req) {
     return this.inventoryService.remove(id, req.user.userId);
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('Administrator', 'Building & Grounds Officer', 'Property Custodian')
+  @Roles('ADMINISTRATOR', 'BUILDING_GROUNDS_OFFICER', 'PROPERTY_CUSTODIAN')
   @Patch(':id/status')
   updateStatus(
     @Param('id') id: string,

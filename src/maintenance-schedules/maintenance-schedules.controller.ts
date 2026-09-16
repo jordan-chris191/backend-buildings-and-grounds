@@ -22,7 +22,7 @@ export class MaintenanceSchedulesController {
   ) {}
 
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('Administrator', 'Building & Grounds Officer')
+  @Roles('ADMINISTRATOR', 'BUILDING_GROUNDS_OFFICER')
   @Post()
   create(@Req() req, @Body() dto: CreateMaintenanceScheduleDto) {
     return this.maintenanceSchedulesService.create(req.user.userId, dto);
@@ -41,21 +41,21 @@ export class MaintenanceSchedulesController {
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('Administrator', 'Building & Grounds Officer')
+  @Roles('ADMINISTRATOR', 'BUILDING_GROUNDS_OFFICER')
   @Patch(':id/complete')
   complete(@Param('id') id: string, @Req() req) {
     return this.maintenanceSchedulesService.complete(id, req.user.userId);
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('Administrator', 'Building & Grounds Officer')
+  @Roles('ADMINISTRATOR', 'BUILDING_GROUNDS_OFFICER')
   @Patch(':id/deactivate')
   deactivate(@Param('id') id: string, @Req() req) {   // ✅ added @Req()
     return this.maintenanceSchedulesService.deactivate(id, req.user.userId);
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
-@Roles('Administrator', 'Building & Grounds Officer')
+@Roles('ADMINISTRATOR', 'BUILDING_GROUNDS_OFFICER')
 @Patch(':id/run-hours')
 recordRunHours(
   @Param('id') id: string,

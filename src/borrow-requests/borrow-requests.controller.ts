@@ -35,7 +35,7 @@ async findAll(
   @Query('status') status?: BorrowRequestStatus,
 ) {
   const user = req.user;
-  const isAdmin = ['Administrator', 'Building & Grounds Officer', 'Property Custodian'].includes(user.role);
+  const isAdmin = ['ADMINISTRATOR', 'BUILDING_GROUNDS_OFFICER', 'PROPERTY_CUSTODIAN'].includes(user.role);
   
   if (isAdmin) {
     // Admin sees all
@@ -54,7 +54,7 @@ async findAll(
 
   // Fixed: pass the whole DTO object
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('Administrator', 'Building & Grounds Officer', 'Property Custodian')
+  @Roles('ADMINISTRATOR', 'BUILDING_GROUNDS_OFFICER', 'PROPERTY_CUSTODIAN')
   @Patch(':id/approve')
   approve(
     @Param('id') id: string,
@@ -66,7 +66,7 @@ async findAll(
 
   // Fixed: pass the whole DTO object
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('Administrator', 'Building & Grounds Officer', 'Property Custodian')
+  @Roles('ADMINISTRATOR', 'BUILDING_GROUNDS_OFFICER', 'PROPERTY_CUSTODIAN')
   @Patch(':id/reject')
   reject(
     @Param('id') id: string,
@@ -78,7 +78,7 @@ async findAll(
 
   // New: partial update before RETURNED
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('Administrator', 'Building & Grounds Officer', 'Property Custodian')
+  @Roles('ADMINISTRATOR', 'BUILDING_GROUNDS_OFFICER', 'PROPERTY_CUSTODIAN')
   @Patch(':id')
   update(
     @Param('id') id: string,

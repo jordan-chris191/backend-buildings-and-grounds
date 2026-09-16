@@ -8,8 +8,8 @@ describe('BorrowRequestsGateway authentication', () => {
   beforeEach(() => { jest.resetAllMocks(); (gateway as any).connectedClients.clear(); });
 
   it('derives identity from a verified token, never handshake userId', async () => {
-    jwt.verifyAsync.mockResolvedValue({ sub: 'user-a', role: 'Campus Staff' });
-    prisma.user.findUnique.mockResolvedValue({ id: 'user-a', isActive: true });
+    jwt.verifyAsync.mockResolvedValue({ sub: 'user-a', role: 'CAMPUS_STAFF', ver: 0 });
+    prisma.user.findUnique.mockResolvedValue({ id: 'user-a', isActive: true, authVersion: 0, role: { isActive: true } });
     const socket = client('valid'); socket.handshake.auth.userId = 'user-b';
     await gateway.handleConnection(socket);
     expect(socket.data.userId).toBe('user-a');
@@ -30,5 +30,14 @@ describe('BorrowRequestsGateway authentication', () => {
     gateway.notifyNewNotification('user-a', { id: 'n', type: 'WORK_REQUEST_ASSIGNED', title: 't', message: 'm', referenceNo: 'WR-1', workRequestId: 'wr', createdAt: new Date(), isRead: false });
     expect(to).toHaveBeenCalledWith('user:user-a');
     expect(to).not.toHaveBeenCalledWith('user:user-b');
+  });
+
+  it('disconnects every live socket for a revoked user', () => {
+    const disconnect = jest.fn();
+    (gateway as any).server = { sockets: { sockets: new Map([['a', { disconnect }]]) } };
+    (gateway as any).connectedClients.set('user-a', new Set(['a']));
+    gateway.disconnectUser('user-a');
+    expect(disconnect).toHaveBeenCalledWith(true);
+    expect((gateway as any).connectedClients.has('user-a')).toBe(false);
   });
 });

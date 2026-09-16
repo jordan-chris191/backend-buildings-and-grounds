@@ -22,7 +22,7 @@ export class PersonsController {
   constructor(private readonly personsService: PersonsService) {}
 
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('Administrator', 'Building & Grounds Officer')
+  @Roles('ADMINISTRATOR', 'BUILDING_GROUNDS_OFFICER')
   @Post()
   create(@Body() dto: CreatePersonDto) {
     return this.personsService.create(dto);
@@ -44,14 +44,14 @@ export class PersonsController {
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('Administrator', 'Building & Grounds Officer')
+  @Roles('ADMINISTRATOR', 'BUILDING_GROUNDS_OFFICER')
   @Patch(':id')
   update(@Param('id') id: string, @Body() dto: UpdatePersonDto) {
     return this.personsService.update(id, dto);
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('Administrator')
+  @Roles('ADMINISTRATOR')
   @Delete(':id')
   remove(@Param('id') id: string) {
     return this.personsService.remove(id);

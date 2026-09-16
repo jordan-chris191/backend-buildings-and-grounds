@@ -22,7 +22,7 @@ export class TransactionsController {
   constructor(private readonly transactionsService: TransactionsService) {}
 
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('Administrator', 'Building & Grounds Officer', 'Property Custodian')
+  @Roles('ADMINISTRATOR', 'BUILDING_GROUNDS_OFFICER', 'PROPERTY_CUSTODIAN')
   @Post()
   create(@Req() req, @Body() dto: CreateTransactionDto) {
     return this.transactionsService.create(req.user.userId, dto);
@@ -44,7 +44,7 @@ export class TransactionsController {
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('Administrator', 'Building & Grounds Officer', 'Property Custodian')
+  @Roles('ADMINISTRATOR', 'BUILDING_GROUNDS_OFFICER', 'PROPERTY_CUSTODIAN')
   @Patch(':id/return')
   returnItem(@Param('id') id: string, @Req() req) {
     return this.transactionsService.markAsReturned(id, req.user.userId);

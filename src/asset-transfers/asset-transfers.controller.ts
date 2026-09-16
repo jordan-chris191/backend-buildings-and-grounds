@@ -26,7 +26,7 @@ export class AssetTransfersController {
   // CREATE BATCH
   // -------------------------------------------------------------------
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('Administrator', 'Building & Grounds Officer')
+  @Roles('ADMINISTRATOR', 'BUILDING_GROUNDS_OFFICER')
   @Post('batch')
   createBatch(@Req() req, @Body() dto: CreateAssetTransferBatchDto) {
     return this.assetTransfersService.createBatch(req.user.userId, dto);
@@ -45,7 +45,7 @@ export class AssetTransfersController {
   // APPROVE BATCH
   // -------------------------------------------------------------------
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('Administrator', 'Building & Grounds Officer')
+  @Roles('ADMINISTRATOR', 'BUILDING_GROUNDS_OFFICER')
   @Patch('batch/:batchId/approve')
   approveBatch(
     @Param('batchId') batchId: string,
@@ -63,7 +63,7 @@ export class AssetTransfersController {
   // REJECT BATCH
   // -------------------------------------------------------------------
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('Administrator', 'Building & Grounds Officer')
+  @Roles('ADMINISTRATOR', 'BUILDING_GROUNDS_OFFICER')
   @Patch('batch/:batchId/reject')
   rejectBatch(
     @Param('batchId') batchId: string,
@@ -81,7 +81,7 @@ export class AssetTransfersController {
   // RECEIVE BATCH
   // -------------------------------------------------------------------
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('Administrator', 'Building & Grounds Officer', 'Property Custodian')
+  @Roles('ADMINISTRATOR', 'BUILDING_GROUNDS_OFFICER', 'PROPERTY_CUSTODIAN')
   @Patch('batch/:batchId/receive')
   receiveBatch(@Param('batchId') batchId: string, @Req() req) {
     return this.assetTransfersService.receiveBatch(batchId, req.user.userId);

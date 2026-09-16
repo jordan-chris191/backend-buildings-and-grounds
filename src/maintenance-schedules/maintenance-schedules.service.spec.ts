@@ -755,8 +755,7 @@ describe('MaintenanceSchedulesService', () => {
 
       await service.recordRunHours('schedule-1', userId, { hours: 550 });
 
-      // Cycle uniqueness is database-backed; this unit mock has no unique index.
-      expect(mockPrismaService.workRequest.create).toHaveBeenCalled();
+      expect(mockPrismaService.workRequest.create).not.toHaveBeenCalled();
     });
   });
 
