@@ -29,7 +29,7 @@ export class WorkRequestsController {
   constructor(private readonly workRequestsService: WorkRequestsService) {}
 
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('Administrator', 'Building & Grounds Officer', 'Property Custodian', 'Office', 'Faculty')
+  @Roles('ADMINISTRATOR', 'BUILDING_GROUNDS_OFFICER', 'PROPERTY_CUSTODIAN', 'FACULTY')
   @Post()
   create(@Req() req, @Body() dto: CreateWorkRequestDto) {
     return this.workRequestsService.create(req.user.userId, dto);
@@ -46,7 +46,8 @@ export class WorkRequestsController {
   ) {
     const assignedToUserId = assignedToMe === 'true' ? req.user.userId : undefined;
     const includeInactiveFlag = includeInactive === 'true';
-    return this.workRequestsService.findAll(
+    return this.workRequestsService.findAllForUser(
+      req.user.userId,
       status,
       campus,
       assignedToUserId,
@@ -56,12 +57,12 @@ export class WorkRequestsController {
 
   @UseGuards(JwtAuthGuard)
   @Get(':id')
-  findOne(@Param('id') id: string) {
-    return this.workRequestsService.findOne(id);
+  findOne(@Param('id') id: string, @Req() req) {
+    return this.workRequestsService.findOneForUser(id, req.user.userId);
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('Administrator', 'Building & Grounds Officer')
+  @Roles('ADMINISTRATOR', 'BUILDING_GROUNDS_OFFICER')
   @Patch(':id')
   update(
     @Param('id') id: string,
@@ -72,7 +73,7 @@ export class WorkRequestsController {
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('Administrator', 'Building & Grounds Officer')
+  @Roles('ADMINISTRATOR', 'BUILDING_GROUNDS_OFFICER')
   @Patch(':id/approve')
   approve(
     @Param('id') id: string,
@@ -83,7 +84,7 @@ export class WorkRequestsController {
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('Administrator', 'Building & Grounds Officer')
+  @Roles('ADMINISTRATOR', 'BUILDING_GROUNDS_OFFICER')
   @Patch(':id/reject')
   reject(
     @Param('id') id: string,
@@ -94,14 +95,14 @@ export class WorkRequestsController {
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('Administrator')
+  @Roles('ADMINISTRATOR')
   @Delete(':id')
   remove(@Param('id') id: string, @Req() req) {
     return this.workRequestsService.remove(id, req.user.userId);
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('Administrator', 'Building & Grounds Officer')
+  @Roles('ADMINISTRATOR', 'BUILDING_GROUNDS_OFFICER')
   @Patch(':id/assign')
   assign(
     @Param('id') id: string,
@@ -112,7 +113,7 @@ export class WorkRequestsController {
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('Administrator', 'Building & Grounds Officer')
+  @Roles('ADMINISTRATOR', 'BUILDING_GROUNDS_OFFICER')
   @Patch(':id/unassign/:assignmentId')
   unassign(
     @Param('id') id: string,
@@ -123,7 +124,7 @@ export class WorkRequestsController {
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('Administrator', 'Building & Grounds Officer', 'Property Custodian', 'Staff', 'Campus Staff')
+  @Roles('ADMINISTRATOR', 'BUILDING_GROUNDS_OFFICER', 'PROPERTY_CUSTODIAN', 'CAMPUS_STAFF')
   @Patch(':id/progress')
   updateProgress(
     @Param('id') id: string,
@@ -140,7 +141,7 @@ export class WorkRequestsController {
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('Administrator', 'Building & Grounds Officer', 'Property Custodian', 'Staff', 'Campus Staff')
+  @Roles('ADMINISTRATOR', 'BUILDING_GROUNDS_OFFICER', 'PROPERTY_CUSTODIAN', 'CAMPUS_STAFF')
   @Patch(':id/complete')
   complete(
     @Param('id') id: string,
@@ -151,7 +152,7 @@ export class WorkRequestsController {
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('Administrator', 'Building & Grounds Officer')
+  @Roles('ADMINISTRATOR', 'BUILDING_GROUNDS_OFFICER')
   @Patch(':id/cancel')
   cancel(@Param('id') id: string, @Req() req) {
     return this.workRequestsService.cancel(id, req.user.userId);

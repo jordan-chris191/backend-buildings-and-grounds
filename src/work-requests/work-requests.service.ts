@@ -24,7 +24,7 @@ import { CompleteWorkRequestDto } from './dto/complete-work-request.dto';
 import { ApproveWorkRequestDto } from './dto/approve-work-request.dto';
 import { RejectWorkRequestDto } from './dto/reject-work-request.dto';
 
-const PRIVILEGED_ROLES = ['Administrator', 'Building & Grounds Officer'];
+const PRIVILEGED_ROLES = ['ADMINISTRATOR', 'BUILDING_GROUNDS_OFFICER'];
 
 @Injectable()
 export class WorkRequestsService {
@@ -73,7 +73,7 @@ export class WorkRequestsService {
   private async requesterForCreate(tx: Prisma.TransactionClient, actorId: string, requestedById?: string) {
     const actor = await tx.user.findUnique({ where: { id: actorId }, include: { role: true } });
     if (!actor?.isActive) throw new ForbiddenException('Active authenticated user required.');
-    const privileged = PRIVILEGED_ROLES.includes(actor.role.name);
+    const privileged = PRIVILEGED_ROLES.includes(actor.role.code);
     if (requestedById && requestedById !== actorId && !privileged) throw new ForbiddenException('You cannot create a request on behalf of another user.');
     const requester = requestedById && privileged
       ? await tx.user.findUnique({ where: { id: requestedById }, include: { office: true } })
@@ -85,9 +85,9 @@ export class WorkRequestsService {
   private async authorizeOperationalActor(tx: Prisma.TransactionClient, workRequestId: string, userId: string, role?: string) {
     const user = await tx.user.findUnique({ where: { id: userId }, include: { role: true } });
     if (!user?.isActive) throw new ForbiddenException('Active user required.');
-    if (PRIVILEGED_ROLES.includes(role ?? user.role.name)) return;
-    const operationalRoles = ['Staff', 'Campus Staff', 'Property Custodian'];
-    if (!operationalRoles.includes(user.role.name)) throw new ForbiddenException('Operational role required.');
+    if (PRIVILEGED_ROLES.includes(role ?? user.role.code)) return;
+    const operationalRoles = ['CAMPUS_STAFF', 'PROPERTY_CUSTODIAN'];
+    if (!operationalRoles.includes(user.role.code)) throw new ForbiddenException('Operational role required.');
     const assignment = await tx.workRequestAssignment.findFirst({ where: { workRequestId, userId, unassignedAt: null } });
     if (!assignment) throw new ForbiddenException('An active assignment is required.');
   }
@@ -179,6 +179,68 @@ export class WorkRequestsService {
       include: this.defaultInclude,
       orderBy: { createdAt: 'desc' },
     });
+  }
+
+  /**
+   * Read scope used by the public endpoints. Operational users see only
+   * active assignments; office requesters see their own requests and requests
+   * for their office. Admin and B&G officers retain the operational view.
+   */
+  private async readScopeForUser(userId: string): Promise<Prisma.WorkRequestWhereInput> {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { id: true, isActive: true, officeId: true, role: { select: { code: true, isActive: true } } },
+    });
+    if (!user?.isActive || !user.role.isActive) {
+      throw new ForbiddenException('Active authenticated user required.');
+    }
+    if (PRIVILEGED_ROLES.includes(user.role.code)) return {};
+    if (user.role.code === 'CAMPUS_STAFF') {
+      return { assignments: { some: { userId, unassignedAt: null } } };
+    }
+    if (user.role.code === 'FACULTY' || user.role.code === 'PROPERTY_CUSTODIAN') {
+      return {
+        OR: [
+          { requestedById: userId },
+          ...(user.officeId ? [{ requestingOfficeId: user.officeId }] : []),
+        ],
+      };
+    }
+    // An authenticated user with an unrecognized role gets no request data.
+    return { id: { in: [] } };
+  }
+
+  async findAllForUser(
+    userId: string,
+    status?: RequestStatus,
+    campus?: Campus,
+    assignedToUserId?: string,
+    includeInactive = false,
+  ) {
+    const scope = await this.readScopeForUser(userId);
+    return this.prisma.workRequest.findMany({
+      where: {
+        ...scope,
+        ...(includeInactive ? {} : { isActive: true }),
+        ...(status && { status }),
+        ...(campus && { campus }),
+        ...(assignedToUserId && {
+          assignments: { some: { userId: assignedToUserId, unassignedAt: null } },
+        }),
+      },
+      include: this.defaultInclude,
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
+  async findOneForUser(id: string, userId: string) {
+    const scope = await this.readScopeForUser(userId);
+    const wr = await this.prisma.workRequest.findFirst({
+      where: { id, ...scope },
+      include: this.defaultInclude,
+    });
+    if (!wr) throw new NotFoundException('Work request not found.');
+    return wr;
   }
 
   async findOne(id: string) {
@@ -336,7 +398,7 @@ if (!assignableStatuses.includes(wr.status)) {
     await this.prisma.$transaction(async tx => {
       const assignee = await tx.user.findUnique({ where: { id: dto.userId }, include: { role: true, position: true } });
       if (!assignee?.isActive || !assignee.position?.isActive) throw new BadRequestException('Assignee and position must be active.');
-      if (!['Staff', 'Campus Staff', 'Property Custodian', ...PRIVILEGED_ROLES].includes(assignee.role.name)) throw new BadRequestException('Assignee does not have an operational role.');
+      if (!['CAMPUS_STAFF', 'PROPERTY_CUSTODIAN', ...PRIVILEGED_ROLES].includes(assignee.role.code)) throw new BadRequestException('Assignee does not have an operational role.');
       try {
         await tx.workRequestAssignment.create({ data: { role: dto.role, workRequestId: id, userId: dto.userId } });
       } catch (error: any) {
