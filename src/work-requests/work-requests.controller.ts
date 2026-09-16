@@ -19,6 +19,7 @@ import { AssignWorkRequestDto } from './dto/assign-work-request.dto';
 import { CompleteWorkRequestDto } from './dto/complete-work-request.dto';
 import { ApproveWorkRequestDto } from './dto/approve-work-request.dto';
 import { RejectWorkRequestDto } from './dto/reject-work-request.dto';
+import { CreateWalkInWorkRequestDto } from './dto/create-walk-in-work-request.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
@@ -33,6 +34,13 @@ export class WorkRequestsController {
   @Post()
   create(@Req() req, @Body() dto: CreateWorkRequestDto) {
     return this.workRequestsService.create(req.user.userId, dto);
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('ADMINISTRATOR', 'BUILDING_GROUNDS_OFFICER')
+  @Post('walk-in')
+  createWalkIn(@Req() req, @Body() dto: CreateWalkInWorkRequestDto) {
+    return this.workRequestsService.createWalkIn(req.user.userId, dto);
   }
 
   @UseGuards(JwtAuthGuard)
@@ -95,7 +103,7 @@ export class WorkRequestsController {
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('ADMINISTRATOR')
+  @Roles('ADMINISTRATOR', 'BUILDING_GROUNDS_OFFICER')
   @Delete(':id')
   remove(@Param('id') id: string, @Req() req) {
     return this.workRequestsService.remove(id, req.user.userId);

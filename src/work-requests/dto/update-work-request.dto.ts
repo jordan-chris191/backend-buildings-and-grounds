@@ -1,9 +1,14 @@
-import { PartialType, OmitType } from '@nestjs/mapped-types';
-import { CreateWorkRequestDto } from './create-work-request.dto';
+import { IsDateString, IsEnum, IsObject, IsOptional, IsString } from 'class-validator';
+import { RequestPriority, RequestType } from '@prisma/client';
 
-export class UpdateWorkRequestDto extends PartialType(
-  OmitType(CreateWorkRequestDto, ['items', 'requestType', 'campus'] as const),
-) {
-  // Additional fields for updating status/progress might go here
-  // but we handle them in dedicated endpoints
+/** Safe metadata edits; walk-in identity fields apply only to WALK_IN records. */
+export class UpdateWorkRequestDto {
+  @IsOptional() @IsString() particulars?: string;
+  @IsOptional() @IsObject() details?: Record<string, any>;
+  @IsOptional() @IsDateString() deadline?: string;
+  @IsOptional() @IsEnum(RequestPriority) priority?: RequestPriority;
+  @IsOptional() @IsString() requestingOfficeId?: string;
+  @IsOptional() @IsEnum(RequestType) requestType?: RequestType;
+  @IsOptional() @IsString() walkInRequesterName?: string;
+  @IsOptional() @IsString() walkInRequesterContact?: string;
 }

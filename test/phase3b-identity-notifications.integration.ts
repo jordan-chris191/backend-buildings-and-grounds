@@ -15,7 +15,7 @@ async function main() {
   try { await prisma.user.update({ where: { id: second.id }, data: { personId: person.id } }); } catch { duplicateLinkRejected = true; }
   check(duplicateLinkRejected, 'one Person was linked to multiple users');
   const office = await prisma.office.upsert({ where: { name_campus: { name: 'phase3b-office', campus: Campus.MC1 } }, update: {}, create: { name: 'phase3b-office', campus: Campus.MC1 } });
-  const request = await prisma.workRequest.create({ data: { referenceNo: `P3B-${Date.now()}`, requestType: 'REPAIR', campus: Campus.MC1, requestedById: first.id, requestingOfficeId: office.id } });
+  const request = await prisma.workRequest.create({ data: { referenceNo: `P3B-${Date.now()}`, requestType: 'REPAIR', campus: Campus.MC1, requestedById: first.id, createdById: first.id, requestingOfficeId: office.id } });
   const notification = await prisma.$transaction(tx => tx.notification.create({ data: { type: 'WORK_REQUEST_ASSIGNED', title: 'New Work Assignment', message: 'assignment', userId: second.id, workRequestId: request.id, referenceNo: request.referenceNo } }));
   check(notification.type === 'WORK_REQUEST_ASSIGNED' && notification.referenceNo === request.referenceNo, 'typed durable assignment notification was not persisted');
   const before = await prisma.notification.count({ where: { userId: second.id, workRequestId: request.id } });

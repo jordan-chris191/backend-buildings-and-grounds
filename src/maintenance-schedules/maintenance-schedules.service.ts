@@ -210,6 +210,7 @@ export class MaintenanceSchedulesService {
         particulars,
         campus: item.campus,
         requestedById: userId,
+        createdById: userId,
         requestingOfficeId: office.id,
         maintenanceScheduleId: schedule.id,
         maintenanceCycleKey: cycleKey,

@@ -27,7 +27,7 @@ async function main() {
   check(cwr.maintenanceCycleKey === `calendar:${due.toISOString()}`, 'calendar atomic creation/linkage failed');
   await expectFailure(() => maintenance.deactivate(cal.id, user.id));
   await expectFailure(() => maintenance.complete(cal.id, user.id));
-  await expectFailure(() => Promise.all([1, 2].map(() => prisma.workRequest.create({ data: { referenceNo: `p3c-dup-${Date.now()}-${Math.random()}`, requestType: 'REPAIR', campus: Campus.MC1, requestedById: user.id, maintenanceScheduleId: cal.id, maintenanceCycleKey: cwr.maintenanceCycleKey } }))));
+  await expectFailure(() => Promise.all([1, 2].map(() => prisma.workRequest.create({ data: { referenceNo: `p3c-dup-${Date.now()}-${Math.random()}`, requestType: 'REPAIR', campus: Campus.MC1, requestedById: user.id, createdById: user.id, maintenanceScheduleId: cal.id, maintenanceCycleKey: cwr.maintenanceCycleKey } }))));
   await ready(cwr.id); const before = new Date(Date.now() + 1_000); const completions = await Promise.allSettled([work.complete(cwr.id, user.id, { dateTimeCompleted: before.toISOString() }, 'CAMPUS_STAFF'), work.complete(cwr.id, user.id, { dateTimeCompleted: before.toISOString() }, 'CAMPUS_STAFF')]);
   const completionWins = completions.filter(x => x.status === 'fulfilled').length;
   if (completionWins !== 1) console.error(completions);

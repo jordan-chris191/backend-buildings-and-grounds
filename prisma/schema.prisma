@@ -60,6 +60,7 @@ model User {
   approvedWorkRequests        WorkRequest[]               @relation("WorkRequestApprovedBy")
   rejectedWorkRequests        WorkRequest[]               @relation("WorkRequestRejectedBy")
   runHourReadingsRecorded     RunHourReading[]            @relation("RunHourReadingRecordedBy")
+  createdWorkRequests         WorkRequest[]               @relation("CreatedWorkRequests")
 
   @@index([roleId])
   @@index([positionId])
@@ -402,7 +403,11 @@ model WorkRequest {
   status                RequestStatus @default(PENDING)
   createdAt             DateTime      @default(now())
   updatedAt             DateTime      @updatedAt
-  requestedById         String
+  source                WorkRequestSource @default(ONLINE)
+  requestedById         String?
+  createdById           String
+  walkInRequesterName   String?
+  walkInRequesterContact String?
   deadline              DateTime?
   progressPercent       Int           @default(0)
   campus                Campus
@@ -423,7 +428,8 @@ model WorkRequest {
 
   notifications       Notification[]             @relation("WorkRequestNotifications")
   maintenanceSchedule MaintenanceSchedule?       @relation("MaintenanceWorkRequests", fields: [maintenanceScheduleId], references: [id])
-  requestedBy         User                       @relation("RequestedWorkRequests", fields: [requestedById], references: [id])
+  requestedBy         User?                      @relation("RequestedWorkRequests", fields: [requestedById], references: [id])
+  createdBy           User                       @relation("CreatedWorkRequests", fields: [createdById], references: [id])
   requestingOffice    Office?                    @relation("OfficeWorkRequests", fields: [requestingOfficeId], references: [id])
   accomplishment      WorkRequestAccomplishment? @relation("WorkRequestAccomplishment")
   assignments         WorkRequestAssignment[]    @relation("WorkRequestAssignments")
@@ -433,6 +439,7 @@ model WorkRequest {
 
   @@unique([maintenanceScheduleId, maintenanceCycleKey])
   @@index([requestedById])
+  @@index([createdById])
   @@index([status])
   @@index([campus])
   @@index([requestType])
@@ -719,6 +726,11 @@ enum RequestType {
   PLAN_DESIGN
   BAYANIHAN
   OTHERS
+}
+
+enum WorkRequestSource {
+  ONLINE
+  WALK_IN
 }
 
 enum RequestStatus {

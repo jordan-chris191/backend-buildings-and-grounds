@@ -14,7 +14,7 @@ import {
 import { Type } from 'class-transformer';
 import { RequestType, Campus, RequestPriority } from '@prisma/client';
 
-class WorkRequestItemDto {
+export class WorkRequestItemDto {
   @IsString()
   inventoryItemId: string;
 

@@ -12,6 +12,7 @@ import {
   Campus,
   Prisma,
   ApprovalStatus,
+  WorkRequestSource,
 } from '@prisma/client';
 
 import { PrismaService } from '../prisma/prisma.service';
@@ -23,6 +24,7 @@ import { AssignWorkRequestDto } from './dto/assign-work-request.dto';
 import { CompleteWorkRequestDto } from './dto/complete-work-request.dto';
 import { ApproveWorkRequestDto } from './dto/approve-work-request.dto';
 import { RejectWorkRequestDto } from './dto/reject-work-request.dto';
+import { CreateWalkInWorkRequestDto } from './dto/create-walk-in-work-request.dto';
 import { formatAssignmentRole, formatWorkRequestType } from './work-request-display';
 
 const PRIVILEGED_ROLES = ['ADMINISTRATOR', 'BUILDING_GROUNDS_OFFICER'];
@@ -63,6 +65,7 @@ export class WorkRequestsService {
         office: { select: { name: true } },
       },
     },
+    createdBy: { select: { id: true, firstName: true, lastName: true, email: true } },
     approvedBy: {
       select: { id: true, firstName: true, lastName: true },
     },
@@ -93,6 +96,28 @@ export class WorkRequestsService {
     if (!assignment) throw new ForbiddenException('An active assignment is required.');
   }
 
+  private async validateMaterials(tx: Prisma.TransactionClient, items: CreateWorkRequestDto['items'], campus: Campus) {
+    const lines = items ?? [];
+    if (new Set(lines.map(item => item.inventoryItemId)).size !== lines.length) {
+      throw new ConflictException('Duplicate work-request item lines are not allowed.');
+    }
+    for (const item of lines) {
+      if (!(Number(item.quantity) > 0)) throw new BadRequestException('Material quantities must be greater than zero.');
+      const inventory = await tx.inventoryItem.findUnique({ where: { id: item.inventoryItemId } });
+      if (!inventory?.isActive) throw new BadRequestException(`Material ${item.inventoryItemId} must exist and be active.`);
+      const stock = await tx.inventoryStock.findUnique({ where: { inventoryItemId_campus: { inventoryItemId: item.inventoryItemId, campus } } });
+      if (!stock?.isActive) throw new BadRequestException(`Material ${item.inventoryItemId} has no active balance at the request campus.`);
+    }
+  }
+
+  private async notifyRequester(
+    wr: { requestedById: string | null; referenceNo: string; id: string },
+    data: { title: string; message: string; type?: string },
+  ) {
+    if (!wr.requestedById) return;
+    await this.notificationsService.create({ ...data, userId: wr.requestedById, workRequestId: wr.id, referenceNo: wr.referenceNo });
+  }
+
   async create(userId: string, dto: CreateWorkRequestDto) {
     return this.prisma.$transaction(async (tx) => {
       const requester = await this.requesterForCreate(tx, userId, dto.requestedById);
@@ -100,15 +125,7 @@ export class WorkRequestsService {
       if (!office?.isActive) throw new BadRequestException('Requesting office must exist and be active.');
       if (office.campus !== dto.campus) throw new BadRequestException('Request campus must match the requesting office campus.');
       if (requester.officeId && requester.officeId !== office.id) throw new BadRequestException('Requester does not belong to the requesting office.');
-      const items = dto.items ?? [];
-      if (new Set(items.map(item => item.inventoryItemId)).size !== items.length) throw new ConflictException('Duplicate work-request item lines are not allowed.');
-      for (const item of items) {
-        if (!(Number(item.quantity) > 0)) throw new BadRequestException('Material quantities must be greater than zero.');
-        const inventory = await tx.inventoryItem.findUnique({ where: { id: item.inventoryItemId } });
-        if (!inventory?.isActive) throw new BadRequestException(`Material ${item.inventoryItemId} must exist and be active.`);
-        const stock = await tx.inventoryStock.findUnique({ where: { inventoryItemId_campus: { inventoryItemId: item.inventoryItemId, campus: dto.campus } } });
-        if (!stock?.isActive) throw new BadRequestException(`Material ${item.inventoryItemId} has no active balance at the request campus.`);
-      }
+      await this.validateMaterials(tx, dto.items, dto.campus);
       const referenceNo = await this.generateReferenceNo();
       const workRequest = await tx.workRequest.create({
         data: {
@@ -121,6 +138,8 @@ export class WorkRequestsService {
           campus: dto.campus,
           priority: dto.priority ?? undefined,
           requestedById: requester.id,
+          createdById: userId,
+          source: WorkRequestSource.ONLINE,
           requestingOfficeId: office.id,
           maintenanceScheduleId: dto.maintenanceScheduleId,
           items: {
@@ -142,6 +161,38 @@ export class WorkRequestsService {
         performedById: userId,
       }, tx);
 
+      return workRequest;
+    });
+  }
+
+  async createWalkIn(userId: string, dto: CreateWalkInWorkRequestDto) {
+    return this.prisma.$transaction(async tx => {
+      if (!dto.walkInRequesterName?.trim()) {
+        throw new BadRequestException('Walk-in requester name is required.');
+      }
+      const office = await tx.office.findUnique({ where: { id: dto.requestingOfficeId } });
+      if (!office?.isActive) throw new BadRequestException('Requesting office must exist and be active.');
+      await this.validateMaterials(tx, dto.items, office.campus);
+      const referenceNo = await this.generateReferenceNo();
+      const workRequest = await tx.workRequest.create({
+        data: {
+          referenceNo,
+          source: WorkRequestSource.WALK_IN,
+          requestType: dto.requestType,
+          particulars: dto.particulars,
+          details: dto.details as object,
+          deadline: dto.deadline ? new Date(dto.deadline) : undefined,
+          priority: dto.priority ?? undefined,
+          campus: office.campus,
+          requestingOfficeId: office.id,
+          walkInRequesterName: dto.walkInRequesterName,
+          walkInRequesterContact: dto.walkInRequesterContact,
+          createdById: userId,
+          items: { create: dto.items?.map(item => ({ inventoryItemId: item.inventoryItemId, description: item.description, quantity: new Prisma.Decimal(item.quantity) })) ?? [] },
+        },
+        include: this.defaultInclude,
+      });
+      await this.auditLogService.log({ action: 'CREATE_WALK_IN', entityType: 'WorkRequest', entityId: workRequest.id, description: `Created walk-in work request ${referenceNo}`, metadata: { source: WorkRequestSource.WALK_IN }, performedById: userId }, tx);
       return workRequest;
     });
   }
@@ -260,11 +311,34 @@ if (!allowedStatuses.includes(existing.status)) {
   throw new BadRequestException('This can only be edited while pending or assigned.');
 }
 
+    const walkInFieldsPresent = dto.walkInRequesterName !== undefined || dto.walkInRequesterContact !== undefined || dto.requestType !== undefined;
+    if (existing.source !== WorkRequestSource.WALK_IN && walkInFieldsPresent) {
+      throw new BadRequestException('Walk-in fields can only be edited on walk-in work requests.');
+    }
+    let campus: Campus | undefined;
+    if (dto.requestingOfficeId) {
+      const office = await this.prisma.office.findUnique({ where: { id: dto.requestingOfficeId } });
+      if (!office?.isActive) throw new BadRequestException('Requesting office must exist and be active.');
+      campus = office.campus;
+    }
+    if (existing.source === WorkRequestSource.WALK_IN && dto.walkInRequesterName !== undefined && !dto.walkInRequesterName.trim()) {
+      throw new BadRequestException('Walk-in requester name is required.');
+    }
+
     const updated = await this.prisma.workRequest.update({
       where: { id },
       data: {
-        ...dto,
+        particulars: dto.particulars,
+        details: dto.details as object,
         deadline: dto.deadline ? new Date(dto.deadline) : undefined,
+        priority: dto.priority,
+        requestingOfficeId: dto.requestingOfficeId,
+        ...(campus && { campus }),
+        ...(existing.source === WorkRequestSource.WALK_IN && {
+          requestType: dto.requestType,
+          walkInRequesterName: dto.walkInRequesterName,
+          walkInRequesterContact: dto.walkInRequesterContact,
+        }),
       },
       include: this.defaultInclude,
     });
@@ -307,11 +381,9 @@ if (!allowedStatuses.includes(existing.status)) {
       performedById: userId,
     });
 
-    await this.notificationsService.create({
+    await this.notifyRequester(wr, {
       title: 'Work request approved',
       message: `Your work request ${wr.referenceNo} has been approved.`,
-      userId: wr.requestedById,
-      workRequestId: id,
     });
 
     return this.findOne(id);
@@ -347,11 +419,9 @@ if (!allowedStatuses.includes(existing.status)) {
       performedById: userId,
     });
 
-    await this.notificationsService.create({
+    await this.notifyRequester(wr, {
       title: 'Work request rejected',
       message: `Your work request ${wr.referenceNo} was rejected: ${dto.reason}`,
-      userId: wr.requestedById,
-      workRequestId: id,
     });
 
     return this.findOne(id);
@@ -425,11 +495,9 @@ if (!assignableStatuses.includes(wr.status)) {
 
     if (assignedNotification) this.notificationsService.emit(assignedNotification, dto.userId);
 
-    await this.notificationsService.create({
+    await this.notifyRequester(wr, {
       title: 'Work request assigned',
       message: `Your work request ${wr.referenceNo} has been assigned to a team.`,
-      userId: wr.requestedById,
-      workRequestId: id,
     });
 
     return this.findOne(id);
@@ -545,11 +613,9 @@ if (!assignableStatuses.includes(wr.status)) {
       await this.auditLogService.log({ action: 'PROGRESS_UPDATE', entityType: 'WorkRequest', entityId: id, description: `Progress set to ${progressPercent}%`, performedById: userId }, tx);
     });
 
-    await this.notificationsService.create({
+    await this.notifyRequester(wr, {
       title: 'Progress updated',
       message: `Work request ${wr.referenceNo} is now ${progressPercent}% complete.`,
-      userId: wr.requestedById,
-      workRequestId: id,
     });
 
     return this.findOne(id);
@@ -703,20 +769,16 @@ if (!assignableStatuses.includes(wr.status)) {
     });
 
     if (cannotBeRepaired) {
-      await this.notificationsService.create({
-        type: 'WORK_REQUEST_CANCELLED', referenceNo: wr.referenceNo,
+      await this.notifyRequester(wr, {
+        type: 'WORK_REQUEST_CANCELLED',
         title: 'Work request cancelled',
         message: `Work request ${wr.referenceNo} has been cancelled because the item cannot be repaired.`,
-        userId: wr.requestedById,
-        workRequestId: id,
       });
     } else {
-      await this.notificationsService.create({
-        type: 'WORK_REQUEST_COMPLETED', referenceNo: wr.referenceNo,
+      await this.notifyRequester(wr, {
+        type: 'WORK_REQUEST_COMPLETED',
         title: 'Work request completed',
         message: `Your work request ${wr.referenceNo} has been completed.`,
-        userId: wr.requestedById,
-        workRequestId: id,
       });
     }
 
@@ -733,7 +795,10 @@ if (!assignableStatuses.includes(wr.status)) {
     await this.prisma.$transaction(async tx => {
       const changed = await tx.workRequest.updateMany({ where: { id, status: { in: [RequestStatus.PENDING, RequestStatus.ASSIGNED, RequestStatus.IN_PROGRESS] } }, data: { status: RequestStatus.CANCELLED, isActive: false } });
       if (changed.count !== 1) throw new ConflictException('Work request was cancelled concurrently.');
-      const recipients = new Set([wr.requestedById, ...wr.assignments.filter(a => !a.unassignedAt).map(a => a.userId)]);
+      const recipients = new Set([
+        ...(wr.requestedById ? [wr.requestedById] : []),
+        ...wr.assignments.filter(a => !a.unassignedAt).map(a => a.userId),
+      ]);
       notifications = await Promise.all([...recipients].map(recipientId => this.notificationsService.createInTransaction(tx, {
         type: 'WORK_REQUEST_CANCELLED', referenceNo: wr.referenceNo, title: 'Work request cancelled',
         message: `Work request ${wr.referenceNo} has been cancelled.`, userId: recipientId, workRequestId: id,
