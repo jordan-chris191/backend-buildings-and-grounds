@@ -328,36 +328,52 @@ export class MaintenanceSchedulesService {
   }
 
   async recordRunHours(id: string, userId: string, dto: RecordRunHoursDto) {
-    const schedule = await this.findOne(id); // already includes inventoryItem via defaultInclude
-
-    if (schedule.basis !== MaintenanceBasis.RUNTIME) {
-      throw new BadRequestException(
-        'Run hours only apply to RUNTIME schedules.',
-      );
-    }
-
     const newReading = new Prisma.Decimal(dto.hours);
-    if (newReading.lessThan(schedule.currentRunHours)) {
-      throw new BadRequestException(
-        `New reading (${dto.hours}) cannot be lower than the last recorded reading (${schedule.currentRunHours}).`,
-      );
-    }
 
     await this.prisma.$transaction(async tx => {
-      const changed = await tx.$queryRaw<{ id: string }[]>(Prisma.sql`
-        UPDATE "MaintenanceSchedule" SET "currentRunHours" = ${newReading}
-        WHERE id = ${id} AND "isActive" = true AND "currentRunHours" <= ${newReading}
-        RETURNING id`);
-      if (changed.length !== 1) throw new BadRequestException('Run-hour reading cannot be lower than the current recorded value.');
+      // The lock makes the persisted schedule row the sole authority for both
+      // the monotonic comparison and threshold-cycle generation.
+      const locked = await tx.$queryRaw<{ id: string }[]>(Prisma.sql`
+        SELECT "id" FROM "MaintenanceSchedule"
+        WHERE "id" = ${id}
+        FOR UPDATE`);
+      if (locked.length !== 1) throw new NotFoundException('Maintenance schedule not found.');
+
+      const schedule = await tx.maintenanceSchedule.findUnique({
+        where: { id },
+        include: this.defaultInclude,
+      });
+      if (!schedule) throw new NotFoundException('Maintenance schedule not found.');
+      if (schedule.basis !== MaintenanceBasis.RUNTIME) {
+        throw new BadRequestException('Run hours only apply to RUNTIME schedules.');
+      }
+      if (schedule.isActive === false) throw new BadRequestException('Maintenance schedule is inactive.');
+      if (newReading.lessThan(schedule.currentRunHours)) {
+        throw new BadRequestException(
+          `New reading (${dto.hours}) cannot be lower than the last recorded reading (${schedule.currentRunHours}).`,
+        );
+      }
+
+      const updated = await tx.maintenanceSchedule.update({
+        where: { id },
+        data: { currentRunHours: newReading },
+        include: this.defaultInclude,
+      });
       await tx.runHourReading.create({ data: { maintenanceScheduleId: id, hours: newReading, recordedById: userId } });
-      const updated = (await tx.maintenanceSchedule.findUnique({ where: { id }, include: this.defaultInclude })) ?? schedule;
       await this.auditLogService.log({ action: 'RECORD_RUN_HOURS', entityType: 'MaintenanceSchedule', entityId: id, description: `Recorded run hours for "${schedule.title}": ${dto.hours} hrs`, performedById: userId }, tx);
       if (updated.nextDueAtHours && newReading.greaterThanOrEqualTo(updated.nextDueAtHours)) {
-        try {
-          await this.createWorkRequestForSchedule(updated, updated.inventoryItem, userId, tx, `runtime:${updated.nextDueAtHours.toString()}`);
-          await this.auditLogService.log({ action: 'AUTO_CREATE_WORK_REQUEST', entityType: 'MaintenanceSchedule', entityId: id, description: `Runtime threshold ${updated.nextDueAtHours} reached`, performedById: userId }, tx);
-        } catch (error: any) {
-          if (error?.code !== 'P2002') throw error;
+        const cycleKey = `runtime:${updated.nextDueAtHours.toString()}`;
+        const existingCycle = await tx.workRequest.findFirst({
+          where: { maintenanceScheduleId: id, maintenanceCycleKey: cycleKey },
+        });
+        if (!existingCycle) {
+          try {
+            await this.createWorkRequestForSchedule(updated, updated.inventoryItem, userId, tx, cycleKey);
+            await this.auditLogService.log({ action: 'AUTO_CREATE_WORK_REQUEST', entityType: 'MaintenanceSchedule', entityId: id, description: `Runtime threshold ${updated.nextDueAtHours} reached`, performedById: userId }, tx);
+          } catch (error: any) {
+            // Keep the unique index as defense in depth for non-runtime writers.
+            if (error?.code !== 'P2002') throw error;
+          }
         }
       }
     });
