@@ -29,7 +29,7 @@ export class WorkRequestsController {
   constructor(private readonly workRequestsService: WorkRequestsService) {}
 
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('Administrator', 'Building & Grounds Officer', 'Property Custodian', 'Office')
+  @Roles('Administrator', 'Building & Grounds Officer', 'Property Custodian', 'Office', 'Faculty')
   @Post()
   create(@Req() req, @Body() dto: CreateWorkRequestDto) {
     return this.workRequestsService.create(req.user.userId, dto);
@@ -123,7 +123,7 @@ export class WorkRequestsController {
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('Administrator', 'Building & Grounds Officer', 'Property Custodian', 'Staff')
+  @Roles('Administrator', 'Building & Grounds Officer', 'Property Custodian', 'Staff', 'Campus Staff')
   @Patch(':id/progress')
   updateProgress(
     @Param('id') id: string,
@@ -135,11 +135,12 @@ export class WorkRequestsController {
       body.progressPercent,
       req.user.userId,
       body.note,
+      req.user.role,
     );
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('Administrator', 'Building & Grounds Officer', 'Property Custodian', 'Staff', 'Office')
+  @Roles('Administrator', 'Building & Grounds Officer', 'Property Custodian', 'Staff', 'Campus Staff')
   @Patch(':id/complete')
   complete(
     @Param('id') id: string,

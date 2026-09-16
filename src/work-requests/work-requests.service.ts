@@ -4,6 +4,7 @@ import {
   NotFoundException,
   BadRequestException,
   ForbiddenException,
+  ConflictException,
 } from '@nestjs/common';
 import {
   RequestStatus,
@@ -69,10 +70,45 @@ export class WorkRequestsService {
     },
   };
 
-  async create(userId: string, dto: CreateWorkRequestDto) {
-    const referenceNo = await this.generateReferenceNo();
+  private async requesterForCreate(tx: Prisma.TransactionClient, actorId: string, requestedById?: string) {
+    const actor = await tx.user.findUnique({ where: { id: actorId }, include: { role: true } });
+    if (!actor?.isActive) throw new ForbiddenException('Active authenticated user required.');
+    const privileged = PRIVILEGED_ROLES.includes(actor.role.name);
+    if (requestedById && requestedById !== actorId && !privileged) throw new ForbiddenException('You cannot create a request on behalf of another user.');
+    const requester = requestedById && privileged
+      ? await tx.user.findUnique({ where: { id: requestedById }, include: { office: true } })
+      : await tx.user.findUnique({ where: { id: actorId }, include: { office: true } });
+    if (!requester?.isActive) throw new BadRequestException('Requester must exist and be active.');
+    return requester;
+  }
 
+  private async authorizeOperationalActor(tx: Prisma.TransactionClient, workRequestId: string, userId: string, role?: string) {
+    const user = await tx.user.findUnique({ where: { id: userId }, include: { role: true } });
+    if (!user?.isActive) throw new ForbiddenException('Active user required.');
+    if (PRIVILEGED_ROLES.includes(role ?? user.role.name)) return;
+    const operationalRoles = ['Staff', 'Campus Staff', 'Property Custodian'];
+    if (!operationalRoles.includes(user.role.name)) throw new ForbiddenException('Operational role required.');
+    const assignment = await tx.workRequestAssignment.findFirst({ where: { workRequestId, userId, unassignedAt: null } });
+    if (!assignment) throw new ForbiddenException('An active assignment is required.');
+  }
+
+  async create(userId: string, dto: CreateWorkRequestDto) {
     return this.prisma.$transaction(async (tx) => {
+      const requester = await this.requesterForCreate(tx, userId, dto.requestedById);
+      const office = dto.requestingOfficeId ? await tx.office.findUnique({ where: { id: dto.requestingOfficeId } }) : requester.office;
+      if (!office?.isActive) throw new BadRequestException('Requesting office must exist and be active.');
+      if (office.campus !== dto.campus) throw new BadRequestException('Request campus must match the requesting office campus.');
+      if (requester.officeId && requester.officeId !== office.id) throw new BadRequestException('Requester does not belong to the requesting office.');
+      const items = dto.items ?? [];
+      if (new Set(items.map(item => item.inventoryItemId)).size !== items.length) throw new ConflictException('Duplicate work-request item lines are not allowed.');
+      for (const item of items) {
+        if (!(Number(item.quantity) > 0)) throw new BadRequestException('Material quantities must be greater than zero.');
+        const inventory = await tx.inventoryItem.findUnique({ where: { id: item.inventoryItemId } });
+        if (!inventory?.isActive) throw new BadRequestException(`Material ${item.inventoryItemId} must exist and be active.`);
+        const stock = await tx.inventoryStock.findUnique({ where: { inventoryItemId_campus: { inventoryItemId: item.inventoryItemId, campus: dto.campus } } });
+        if (!stock?.isActive) throw new BadRequestException(`Material ${item.inventoryItemId} has no active balance at the request campus.`);
+      }
+      const referenceNo = await this.generateReferenceNo();
       const workRequest = await tx.workRequest.create({
         data: {
           referenceNo,
@@ -83,8 +119,8 @@ export class WorkRequestsService {
           deadline: dto.deadline ? new Date(dto.deadline) : undefined,
           campus: dto.campus,
           priority: dto.priority ?? undefined,
-          requestedById: dto.requestedById ?? userId,
-          requestingOfficeId: dto.requestingOfficeId,
+          requestedById: requester.id,
+          requestingOfficeId: office.id,
           maintenanceScheduleId: dto.maintenanceScheduleId,
           items: {
             create: dto.items?.map((item) => ({
@@ -103,7 +139,7 @@ export class WorkRequestsService {
         entityId: workRequest.id,
         description: `Created work request ${referenceNo}`,
         performedById: userId,
-      });
+      }, tx);
 
       return workRequest;
     });
@@ -189,8 +225,8 @@ if (!allowedStatuses.includes(existing.status)) {
       throw new BadRequestException('This work request has already been reviewed.');
     }
 
-    await this.prisma.workRequest.update({
-      where: { id },
+    const approved = await this.prisma.workRequest.updateMany({
+      where: { id, status: RequestStatus.PENDING, approvalStatus: ApprovalStatus.PENDING },
       data: {
         approvalStatus: ApprovalStatus.APPROVED,
         approvalNotes: dto.notes,
@@ -198,6 +234,7 @@ if (!allowedStatuses.includes(existing.status)) {
         approvedById: userId,
       },
     });
+    if (approved.count !== 1) throw new ConflictException('Work request was reviewed concurrently.');
 
     await this.auditLogService.log({
       action: 'APPROVE',
@@ -226,8 +263,8 @@ if (!allowedStatuses.includes(existing.status)) {
       throw new BadRequestException('This work request has already been reviewed.');
     }
 
-    await this.prisma.workRequest.update({
-      where: { id },
+    const rejected = await this.prisma.workRequest.updateMany({
+      where: { id, status: RequestStatus.PENDING, approvalStatus: ApprovalStatus.PENDING },
       data: {
         approvalStatus: ApprovalStatus.REJECTED,
         rejectionReason: dto.reason,
@@ -237,6 +274,7 @@ if (!allowedStatuses.includes(existing.status)) {
         isActive: false,
       },
     });
+    if (rejected.count !== 1) throw new ConflictException('Work request was reviewed concurrently.');
 
     await this.auditLogService.log({
       action: 'REJECT',
@@ -294,34 +332,19 @@ if (!assignableStatuses.includes(wr.status)) {
       throw new BadRequestException('Work request must be approved before staff can be assigned.');
     }
 
-    const existingAssignment = wr.assignments.find(
-      (a) => a.userId === dto.userId && !a.unassignedAt,
-    );
-    if (existingAssignment) {
-      throw new BadRequestException('User is already assigned to this work request.');
-    }
-
-    if (dto.role === AssignmentRole.LEAD) {
-      const activeLead = wr.assignments.find(
-        (a) => a.role === AssignmentRole.LEAD && !a.unassignedAt,
-      );
-      if (activeLead) throw new BadRequestException('A lead is already assigned.');
-    }
-
-    const assignment = await this.prisma.workRequestAssignment.create({
-      data: {
-        role: dto.role,
-        workRequestId: id,
-        userId: dto.userId,
-      },
-    });
-
-    if (wr.status === RequestStatus.PENDING) {
-      await this.prisma.workRequest.update({
-        where: { id },
-        data: { status: RequestStatus.ASSIGNED },
-      });
-    }
+    await this.prisma.$transaction(async tx => {
+      const assignee = await tx.user.findUnique({ where: { id: dto.userId }, include: { role: true, position: true } });
+      if (!assignee?.isActive || !assignee.position?.isActive) throw new BadRequestException('Assignee and position must be active.');
+      if (!['Staff', 'Campus Staff', 'Property Custodian', ...PRIVILEGED_ROLES].includes(assignee.role.name)) throw new BadRequestException('Assignee does not have an operational role.');
+      try {
+        await tx.workRequestAssignment.create({ data: { role: dto.role, workRequestId: id, userId: dto.userId } });
+      } catch (error: any) {
+        if (error?.code === 'P2002') throw new ConflictException(dto.role === AssignmentRole.LEAD ? 'An active lead already exists.' : 'User is already actively assigned.');
+        throw error;
+      }
+      const changed = await tx.workRequest.updateMany({ where: { id, status: RequestStatus.PENDING, approvalStatus: ApprovalStatus.APPROVED }, data: { status: RequestStatus.ASSIGNED } });
+      if (wr.status === RequestStatus.PENDING && changed.count !== 1) throw new ConflictException('Work request state changed concurrently.');
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
 
     await this.auditLogService.log({
       action: 'ASSIGN',
@@ -402,7 +425,7 @@ if (!assignableStatuses.includes(wr.status)) {
     return this.findOne(id);
   }
 
-  async updateProgress(id: string, progressPercent: number, userId: string, note?: string) {
+  async updateProgress(id: string, progressPercent: number, userId: string, note?: string, userRole?: string) {
     if (progressPercent < 0 || progressPercent > 100) {
       throw new BadRequestException('Progress must be between 0 and 100.');
     }
@@ -418,13 +441,15 @@ if (!assignableStatuses.includes(wr.status)) {
         : undefined;
 
     await this.prisma.$transaction(async (tx) => {
-      await tx.workRequest.update({
-        where: { id },
+      await this.authorizeOperationalActor(tx, id, userId, userRole);
+      const changed = await tx.workRequest.updateMany({
+        where: { id, status: { in: [RequestStatus.ASSIGNED, RequestStatus.IN_PROGRESS] } },
         data: {
           progressPercent,
           ...(newStatus && { status: newStatus }),
         },
       });
+      if (changed.count !== 1) throw new ConflictException('Work request state changed concurrently.');
 
       if (progressPercent > 0) {
         const existingAccomplishment = await tx.workRequestAccomplishment.findUnique({
@@ -452,14 +477,7 @@ if (!assignableStatuses.includes(wr.status)) {
           });
         }
       }
-    });
-
-    await this.auditLogService.log({
-      action: 'PROGRESS_UPDATE',
-      entityType: 'WorkRequest',
-      entityId: id,
-      description: `Progress set to ${progressPercent}%`,
-      performedById: userId,
+      await this.auditLogService.log({ action: 'PROGRESS_UPDATE', entityType: 'WorkRequest', entityId: id, description: `Progress set to ${progressPercent}%`, performedById: userId }, tx);
     });
 
     await this.notificationsService.create({
@@ -535,29 +553,30 @@ if (!assignableStatuses.includes(wr.status)) {
       throw new BadRequestException('Work request cannot be completed in its current status.');
     }
 
-    const cannotBeRepaired = (dto.completionDetails as any)?.cannotBeRepaired === true;
+    const cannotBeRepaired = dto.cannotBeRepaired === true;
+    const startedAt = dto.dateTimeStarted ? new Date(dto.dateTimeStarted) : wr.accomplishment?.dateTimeStarted ?? new Date();
+    const completedAt = dto.dateTimeCompleted ? new Date(dto.dateTimeCompleted) : new Date();
+    if (completedAt < startedAt) throw new BadRequestException('Completion time cannot be before start time.');
 
     const updated = await this.prisma.$transaction(async (tx) => {
-      await tx.workRequest.update({
-        where: { id },
+      await this.authorizeOperationalActor(tx, id, userId, userRole);
+      const changed = await tx.workRequest.updateMany({
+        where: { id, status: { in: [RequestStatus.ASSIGNED, RequestStatus.IN_PROGRESS] } },
         data: {
           status: cannotBeRepaired ? RequestStatus.CANCELLED : RequestStatus.COMPLETED,
           progressPercent: 100,
           isActive: !cannotBeRepaired,
         },
       });
+      if (changed.count !== 1) throw new ConflictException('Work request was completed concurrently.');
 
       if (wr.accomplishment) {
         await tx.workRequestAccomplishment.update({
           where: { id: wr.accomplishment.id },
           data: {
             dateTimeStarted:
-              dto.dateTimeStarted
-                ? new Date(dto.dateTimeStarted)
-                : wr.accomplishment.dateTimeStarted ?? new Date(),
-            dateTimeCompleted: dto.dateTimeCompleted
-              ? new Date(dto.dateTimeCompleted)
-              : new Date(),
+              startedAt,
+            dateTimeCompleted: completedAt,
             completionDetails: dto.completionDetails as object,
             serviceRating: dto.serviceRating,
             expectationRating: dto.expectationRating,
@@ -569,10 +588,8 @@ if (!assignableStatuses.includes(wr.status)) {
           data: {
             workRequestId: id,
             bgPersonnelId: userId,
-            dateTimeStarted: dto.dateTimeStarted ? new Date(dto.dateTimeStarted) : new Date(),
-            dateTimeCompleted: dto.dateTimeCompleted
-              ? new Date(dto.dateTimeCompleted)
-              : new Date(),
+            dateTimeStarted: startedAt,
+            dateTimeCompleted: completedAt,
             completionDetails: dto.completionDetails as object,
             serviceRating: dto.serviceRating,
             expectationRating: dto.expectationRating,

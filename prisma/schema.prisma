@@ -443,6 +443,7 @@ model WorkRequestItem {
   inventoryItem   InventoryItem @relation("InventoryWorkRequestItems", fields: [inventoryItemId], references: [id])
   workRequest     WorkRequest   @relation("WorkRequestItems", fields: [workRequestId], references: [id], onDelete: Cascade)
 
+  @@unique([workRequestId, inventoryItemId])
   @@index([workRequestId])
   @@index([inventoryItemId])
 }

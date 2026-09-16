@@ -23,7 +23,7 @@ class WorkRequestItemDto {
   description?: string;
 
   @IsNumber()
-  @Min(0)
+  @Min(0.0001)
   quantity: number;
 }
 
