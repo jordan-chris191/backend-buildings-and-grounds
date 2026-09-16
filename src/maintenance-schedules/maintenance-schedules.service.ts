@@ -8,6 +8,8 @@ import { PrismaService } from '../prisma/prisma.service';
 import { AuditLogService } from '../audit-log/audit-log.service';
 import { RecordRunHoursDto } from './dto/record-run-hours.dto';
 import { CreateMaintenanceScheduleDto } from './dto/create-maintenance-schedule.dto';
+import { UpdateMaintenanceScheduleDto } from './dto/update-maintenance-schedule.dto';
+import { Cron, CronExpression } from '@nestjs/schedule';
 import {
   RequestType,
   Prisma,
@@ -52,6 +54,19 @@ export class MaintenanceSchedulesService {
       select: { id: true, firstName: true, lastName: true },
     },
     workRequests: true,
+  };
+
+  private readonly detailInclude = {
+    ...this.defaultInclude,
+    runHourReadings: {
+      orderBy: { recordedAt: 'desc' as const },
+      select: {
+        id: true,
+        hours: true,
+        recordedAt: true,
+        recordedBy: { select: { id: true, firstName: true, lastName: true, email: true } },
+      },
+    },
   };
 
   async create(userId: string, dto: CreateMaintenanceScheduleDto) {
@@ -258,9 +273,9 @@ export class MaintenanceSchedulesService {
     return `WR-${year}-${seq}`;
   }
 
-  async findAll() {
+  async findAll(includeInactive = false) {
     return this.prisma.maintenanceSchedule.findMany({
-      where: { isActive: true },
+      where: includeInactive ? {} : { isActive: true },
       include: this.defaultInclude,
       orderBy: { nextDueAt: 'asc' },
     });
@@ -269,12 +284,99 @@ export class MaintenanceSchedulesService {
   async findOne(id: string) {
     const schedule = await this.prisma.maintenanceSchedule.findUnique({
       where: { id },
-      include: this.defaultInclude,
+      include: this.detailInclude,
     });
     if (!schedule) {
       throw new NotFoundException('Maintenance schedule not found.');
     }
     return schedule;
+  }
+
+  async update(id: string, userId: string, dto: UpdateMaintenanceScheduleDto) {
+    const schedule = await this.findOne(id);
+    if (dto.frequencyDays !== undefined && schedule.basis !== MaintenanceBasis.CALENDAR) {
+      throw new BadRequestException('frequencyDays can only be changed on CALENDAR schedules.');
+    }
+    if (dto.frequencyHours !== undefined && schedule.basis !== MaintenanceBasis.RUNTIME) {
+      throw new BadRequestException('frequencyHours can only be changed on RUNTIME schedules.');
+    }
+    if ((dto.frequencyDays !== undefined && dto.frequencyDays < 1) || (dto.frequencyHours !== undefined && dto.frequencyHours < 1)) {
+      throw new BadRequestException('Maintenance frequency must be greater than zero.');
+    }
+    if (dto.frequencyDays !== undefined || dto.frequencyHours !== undefined) {
+      const openCycle = await this.prisma.workRequest.findFirst({
+        where: { maintenanceScheduleId: id, maintenanceCycleKey: { not: null }, status: { notIn: ['COMPLETED', 'CANCELLED'] } },
+      });
+      if (openCycle) throw new ConflictException('Cannot change frequency while a generated maintenance work request is open.');
+    }
+    // The current due date/threshold identifies the existing cycle. An interval
+    // edit applies to the next advancement, preserving that cycle's identity.
+    const updated = await this.prisma.maintenanceSchedule.update({
+      where: { id },
+      data: {
+        title: dto.title,
+        notes: dto.notes,
+        frequencyDays: dto.frequencyDays,
+        frequencyHours: dto.frequencyHours === undefined ? undefined : new Prisma.Decimal(dto.frequencyHours),
+      },
+    });
+    await this.auditLogService.log({ action: 'UPDATE', entityType: 'MaintenanceSchedule', entityId: id, description: `Updated maintenance schedule "${updated.title}"`, performedById: userId });
+    return this.findOne(id);
+  }
+
+  async reactivate(id: string, userId: string) {
+    const schedule = await this.findOne(id);
+    if (schedule.isActive) throw new ConflictException('Maintenance schedule is already active.');
+    if (!schedule.inventoryItem.isActive || !schedule.inventoryItem.maintainableAssetProfile?.isActive) {
+      throw new BadRequestException('The inventory item and its maintainable-asset profile must be active before reactivation.');
+    }
+    try {
+      await this.prisma.maintenanceSchedule.update({ where: { id }, data: { isActive: true } });
+    } catch (error) {
+      if (this.isActiveScheduleUniqueConstraint(error)) {
+        throw new ConflictException(`An active ${schedule.basis} maintenance schedule already exists for this inventory item.`);
+      }
+      throw error;
+    }
+    await this.auditLogService.log({ action: 'REACTIVATE', entityType: 'MaintenanceSchedule', entityId: id, description: `Maintenance schedule ${id} reactivated`, performedById: userId });
+    return this.findOne(id);
+  }
+
+  @Cron(CronExpression.EVERY_MINUTE)
+  async generateDueCalendarWorkRequests() {
+    await this.processDueCalendarSchedules();
+  }
+
+  /** Testable cron body. It never changes nextDueAt; completion owns advancement. */
+  async processDueCalendarSchedules(now = new Date()): Promise<number> {
+    const dueSchedules = await this.prisma.maintenanceSchedule.findMany({
+      where: { isActive: true, basis: MaintenanceBasis.CALENDAR, nextDueAt: { lte: now } },
+      select: { id: true },
+    });
+    const outcomes = await Promise.allSettled(dueSchedules.map(({ id }) => this.generateDueCalendarWorkRequest(id, now)));
+    return outcomes.filter((outcome) => outcome.status === 'fulfilled' && outcome.value).length;
+  }
+
+  private async generateDueCalendarWorkRequest(id: string, now: Date): Promise<boolean> {
+    return this.prisma.$transaction(async tx => {
+      const locked = await tx.$queryRaw<{ id: string }[]>(Prisma.sql`
+        SELECT "id" FROM "MaintenanceSchedule" WHERE "id" = ${id} FOR UPDATE`);
+      if (locked.length !== 1) return false;
+      const schedule = await tx.maintenanceSchedule.findUnique({
+        where: { id }, include: { inventoryItem: { include: { maintainableAssetProfile: true } } },
+      });
+      if (!schedule || !schedule.isActive || schedule.basis !== MaintenanceBasis.CALENDAR || !schedule.nextDueAt || schedule.nextDueAt > now) return false;
+      const cycleKey = `calendar:${schedule.nextDueAt.toISOString()}`;
+      if (await tx.workRequest.findFirst({ where: { maintenanceScheduleId: id, maintenanceCycleKey: cycleKey } })) return false;
+      try {
+        await this.createWorkRequestForSchedule(schedule, schedule.inventoryItem, schedule.createdById, tx, cycleKey);
+      } catch (error: any) {
+        if (error?.code === 'P2002') return false;
+        throw error;
+      }
+      await this.auditLogService.log({ action: 'AUTO_CREATE_WORK_REQUEST', entityType: 'MaintenanceSchedule', entityId: id, description: `Calendar due cycle ${cycleKey} generated`, performedById: schedule.createdById }, tx);
+      return true;
+    });
   }
 
   async complete(id: string, userId: string) {
