@@ -503,6 +503,9 @@ if (!assignableStatuses.includes(wr.status)) {
 
     // ---------- 1. Rating / feedback update (work request already completed) ----------
     if (wr.status === RequestStatus.COMPLETED) {
+      if (wr.assignments.some(assignment => !assignment.unassignedAt && assignment.userId === userId)) {
+        throw new ConflictException('Work request has already been completed.');
+      }
       if (!isPrivileged && wr.requestedById !== userId) {
         throw new ForbiddenException(
           'Only the requester can submit feedback for this work request.',
@@ -598,6 +601,26 @@ if (!assignableStatuses.includes(wr.status)) {
             comments: dto.comments,
           },
         });
+      }
+
+      // A maintenance-generated work request is the sole authoritative
+      // completion event for its schedule.  The conditional work-request
+      // state claim above makes this advancement happen at most once.
+      if (wr.maintenanceScheduleId && !cannotBeRepaired) {
+        const schedule = await tx.maintenanceSchedule.findUnique({ where: { id: wr.maintenanceScheduleId } });
+        if (!schedule?.isActive) throw new BadRequestException('Maintenance schedule is inactive.');
+        const scheduleData: Prisma.MaintenanceScheduleUpdateInput = { lastPerformedAt: completedAt };
+        if (schedule.basis === 'CALENDAR') {
+          if (!schedule.frequencyDays) throw new BadRequestException('Maintenance schedule is missing frequencyDays.');
+          // Preserve the existing schedule.complete policy: actual completion date.
+          scheduleData.nextDueAt = new Date(completedAt.getTime() + schedule.frequencyDays * 86_400_000);
+        } else {
+          if (!schedule.frequencyHours || !wr.maintenanceCycleKey?.startsWith('runtime:')) throw new BadRequestException('Maintenance runtime cycle is invalid.');
+          const completedThreshold = new Prisma.Decimal(wr.maintenanceCycleKey.slice('runtime:'.length));
+          scheduleData.nextDueAtHours = completedThreshold.plus(schedule.frequencyHours);
+        }
+        await tx.maintenanceSchedule.update({ where: { id: schedule.id }, data: scheduleData });
+        await this.auditLogService.log({ action: 'ADVANCE_FROM_WORK_REQUEST', entityType: 'MaintenanceSchedule', entityId: schedule.id, description: `Advanced from completed maintenance work request ${wr.referenceNo}`, performedById: userId }, tx);
       }
 
       await this.auditLogService.log({

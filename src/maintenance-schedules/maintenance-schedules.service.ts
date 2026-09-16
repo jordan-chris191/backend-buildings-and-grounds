@@ -115,7 +115,8 @@ export class MaintenanceSchedulesService {
 
     let schedule;
     try {
-      schedule = await this.prisma.maintenanceSchedule.create({
+      schedule = await this.prisma.$transaction(async tx => {
+        const created = await tx.maintenanceSchedule.create({
         data: {
           title: dto.title,
           basis: dto.basis,
@@ -138,7 +139,13 @@ export class MaintenanceSchedulesService {
           createdById: userId,
         },
         include: this.defaultInclude,
-      });
+        });
+        if (dto.basis === MaintenanceBasis.CALENDAR) {
+          await this.createWorkRequestForSchedule(created, item, userId, tx, `calendar:${created.nextDueAt!.toISOString()}`);
+        }
+        await this.auditLogService.log({ action: 'CREATE', entityType: 'MaintenanceSchedule', entityId: created.id, description: `Created maintenance schedule "${created.title}" (${created.basis}) for item ${item.name}`, performedById: userId }, tx);
+        return created;
+      }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
     } catch (error) {
       // The partial unique index is the authoritative concurrency safeguard.
       if (this.isActiveScheduleUniqueConstraint(error)) {
@@ -148,20 +155,6 @@ export class MaintenanceSchedulesService {
       }
       throw error;
     }
-
-    // Step 4: only CALENDAR schedules auto-generate an initial work request
-    if (dto.basis === MaintenanceBasis.CALENDAR) {
-      await this.createWorkRequestForSchedule(schedule, item, userId);
-    }
-
-    // Step 5: audit log
-    await this.auditLogService.log({
-      action: 'CREATE',
-      entityType: 'MaintenanceSchedule',
-      entityId: schedule.id,
-      description: `Created maintenance schedule "${schedule.title}" (${schedule.basis}) for item ${item.name}`,
-      performedById: userId,
-    });
 
     return this.findOne(schedule.id);
   }
@@ -179,21 +172,23 @@ export class MaintenanceSchedulesService {
       maintainableAssetProfile?: { assetType: string } | null;
     },
     userId: string,
+    client: Prisma.TransactionClient | PrismaService = this.prisma,
+    cycleKey?: string,
   ) {
-    const office = await this.prisma.office.upsert({
+    const office = await client.office.upsert({
       where: { name_campus: { name: 'BG Office', campus: item.campus } },
       update: {},
       create: { name: 'BG Office', campus: item.campus },
     });
 
-    const referenceNo = await this.generateWorkRequestReferenceNo();
+    const referenceNo = await this.generateWorkRequestReferenceNo(client);
 
     const particulars =
       schedule.basis === MaintenanceBasis.CALENDAR
         ? `Scheduled: ${schedule.title} — ${item.name}`
         : `Runtime threshold reached: ${schedule.title} — ${item.name}`;
 
-    const workRequest = await this.prisma.workRequest.create({
+    const workRequest = await client.workRequest.create({
       data: {
         referenceNo,
         requestType: RequestType.REGULAR_MAINTENANCE,
@@ -202,6 +197,7 @@ export class MaintenanceSchedulesService {
         requestedById: userId,
         requestingOfficeId: office.id,
         maintenanceScheduleId: schedule.id,
+        maintenanceCycleKey: cycleKey,
         items: {
           create: [
             {
@@ -220,26 +216,28 @@ export class MaintenanceSchedulesService {
     await this.autoAssignByAssetType(
       workRequest.id,
       item.maintainableAssetProfile?.assetType,
+      client,
     );
   }
 
   private async autoAssignByAssetType(
     workRequestId: string,
     assetType?: string,
+    client: Prisma.TransactionClient | PrismaService = this.prisma,
   ) {
     if (!assetType) return; // no profile/type — nothing to resolve, leave unassigned
 
-    const config = await this.prisma.assetTypeConfig.findUnique({
+    const config = await client.assetTypeConfig.findUnique({
       where: { assetType: assetType as any },
     });
     if (!config || !config.isActive) return; // no mapping configured — leave for manual assignment
 
-    const technicians = await this.prisma.user.findMany({
+    const technicians = await client.user.findMany({
       where: { positionId: config.positionId, isActive: true },
     });
     if (technicians.length === 0) return; // position has no active users — nothing to assign
 
-    await this.prisma.workRequestAssignment.createMany({
+    await client.workRequestAssignment.createMany({
       data: technicians.map((tech) => ({
         workRequestId,
         userId: tech.id,
@@ -249,9 +247,9 @@ export class MaintenanceSchedulesService {
   }
 
   // Helper: generate reference number for auto-created work requests
-  private async generateWorkRequestReferenceNo(): Promise<string> {
+  private async generateWorkRequestReferenceNo(client: Prisma.TransactionClient | PrismaService = this.prisma): Promise<string> {
     const year = new Date().getFullYear();
-    const sequence = await this.prisma.sequenceCounter.upsert({
+    const sequence = await client.sequenceCounter.upsert({
       where: { type_year: { type: 'WORK_REQUEST', year } },
       update: { count: { increment: 1 } },
       create: { type: 'WORK_REQUEST', year, count: 1 },
@@ -281,6 +279,10 @@ export class MaintenanceSchedulesService {
 
   async complete(id: string, userId: string) {
     const schedule = await this.findOne(id);
+    const generatedWorkRequest = await this.prisma.workRequest.findFirst({ where: { maintenanceScheduleId: id, maintenanceCycleKey: { not: null } } });
+    if (generatedWorkRequest) {
+      throw new ConflictException('Maintenance schedule advancement is performed by completion of its generated work request.');
+    }
 
     const data: Prisma.MaintenanceScheduleUpdateInput = {
       lastPerformedAt: new Date(),
@@ -341,61 +343,32 @@ export class MaintenanceSchedulesService {
       );
     }
 
-    await this.prisma.runHourReading.create({
-      data: {
-        maintenanceScheduleId: id,
-        hours: newReading,
-        recordedById: userId,
-      },
-    });
-
-    const updated = await this.prisma.maintenanceSchedule.update({
-      where: { id },
-      data: { currentRunHours: newReading },
-      include: this.defaultInclude,
-    });
-
-    await this.auditLogService.log({
-      action: 'RECORD_RUN_HOURS',
-      entityType: 'MaintenanceSchedule',
-      entityId: id,
-      description: `Recorded run hours for "${schedule.title}": ${dto.hours} hrs (was ${schedule.currentRunHours})`,
-      performedById: userId,
-    });
-
-    // Auto-generate a work request the moment this reading crosses the due threshold
-    if (
-      updated.nextDueAtHours != null &&
-      newReading.greaterThanOrEqualTo(updated.nextDueAtHours)
-    ) {
-      const alreadyRequested = await this.prisma.workRequest.findFirst({
-        where: {
-          maintenanceScheduleId: id,
-          status: { notIn: ['COMPLETED', 'CANCELLED'] },
-        },
-      });
-
-      if (!alreadyRequested) {
-        await this.createWorkRequestForSchedule(
-          updated,
-          updated.inventoryItem,
-          userId,
-        );
-        await this.auditLogService.log({
-          action: 'AUTO_CREATE_WORK_REQUEST',
-          entityType: 'MaintenanceSchedule',
-          entityId: id,
-          description: `"${updated.title}" reached ${newReading} hrs (threshold ${updated.nextDueAtHours} hrs) — work request auto-generated.`,
-          performedById: userId,
-        });
+    await this.prisma.$transaction(async tx => {
+      const changed = await tx.$queryRaw<{ id: string }[]>(Prisma.sql`
+        UPDATE "MaintenanceSchedule" SET "currentRunHours" = ${newReading}
+        WHERE id = ${id} AND "isActive" = true AND "currentRunHours" <= ${newReading}
+        RETURNING id`);
+      if (changed.length !== 1) throw new BadRequestException('Run-hour reading cannot be lower than the current recorded value.');
+      await tx.runHourReading.create({ data: { maintenanceScheduleId: id, hours: newReading, recordedById: userId } });
+      const updated = (await tx.maintenanceSchedule.findUnique({ where: { id }, include: this.defaultInclude })) ?? schedule;
+      await this.auditLogService.log({ action: 'RECORD_RUN_HOURS', entityType: 'MaintenanceSchedule', entityId: id, description: `Recorded run hours for "${schedule.title}": ${dto.hours} hrs`, performedById: userId }, tx);
+      if (updated.nextDueAtHours && newReading.greaterThanOrEqualTo(updated.nextDueAtHours)) {
+        try {
+          await this.createWorkRequestForSchedule(updated, updated.inventoryItem, userId, tx, `runtime:${updated.nextDueAtHours.toString()}`);
+          await this.auditLogService.log({ action: 'AUTO_CREATE_WORK_REQUEST', entityType: 'MaintenanceSchedule', entityId: id, description: `Runtime threshold ${updated.nextDueAtHours} reached`, performedById: userId }, tx);
+        } catch (error: any) {
+          if (error?.code !== 'P2002') throw error;
+        }
       }
-    }
+    });
 
     return this.findOne(id);
   }
 
   async deactivate(id: string, userId: string) {
     await this.findOne(id);
+    const openWorkRequest = await this.prisma.workRequest.findFirst({ where: { maintenanceScheduleId: id, status: { notIn: ['COMPLETED', 'CANCELLED'] } } });
+    if (openWorkRequest) throw new ConflictException('Cannot deactivate a schedule with an open maintenance work request.');
     await this.prisma.maintenanceSchedule.update({
       where: { id },
       data: { isActive: false },

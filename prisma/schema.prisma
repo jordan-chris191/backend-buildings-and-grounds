@@ -405,6 +405,7 @@ model WorkRequest {
   campus                Campus
   isActive              Boolean       @default(true)
   maintenanceScheduleId String?
+  maintenanceCycleKey   String?
   requestingOfficeId    String?
 
   priority RequestPriority @default(NOT_URGENT)
@@ -427,6 +428,7 @@ model WorkRequest {
   approvedBy          User?                      @relation("WorkRequestApprovedBy", fields: [approvedById], references: [id])
   rejectedBy          User?                      @relation("WorkRequestRejectedBy", fields: [rejectedById], references: [id])
 
+  @@unique([maintenanceScheduleId, maintenanceCycleKey])
   @@index([requestedById])
   @@index([status])
   @@index([campus])
