@@ -35,6 +35,9 @@ model User {
   transfersApproved           AssetTransfer[]             @relation("ApprovedTransfer")
   receivedTransfers           AssetTransfer[]             @relation("PersonReceivedTransfers")
   transfersInitiated          AssetTransfer[]             @relation("TransferredBy")
+  transferBatchesInitiated    AssetTransferBatch[]        @relation("TransferBatchTransferredBy")
+  transferBatchesApproved     AssetTransferBatch[]        @relation("TransferBatchApprovedBy")
+  transferBatchesReceived     AssetTransferBatch[]        @relation("TransferBatchReceivedBy")
   auditLogs                   AuditLog[]                  @relation("AuditPerformer")
   borrowRequestsApproved      BorrowRequest[]             @relation("BorrowApprover")
   borrowRequestsRequested     BorrowRequest[]             @relation("BorrowRequester")
@@ -116,17 +119,18 @@ model Office {
 }
 
 model Person {
-  id                     String            @id @default(uuid())
-  firstName              String
-  lastName               String
-  studentId              String?           @unique
-  contactNumber          String?
-  type                   PersonType        @default(EXTERNAL)
-  isActive               Boolean           @default(true)
-  createdAt              DateTime          @default(now())
-  updatedAt              DateTime          @updatedAt
-  assetTransfersAsHolder AssetTransfer[]   @relation("TransferNewHolder")
-  transactions           ItemTransaction[] @relation("PersonTransactions")
+  id                      String               @id @default(uuid())
+  firstName               String
+  lastName                String
+  studentId               String?              @unique
+  contactNumber           String?
+  type                    PersonType           @default(EXTERNAL)
+  isActive                Boolean              @default(true)
+  createdAt               DateTime             @default(now())
+  updatedAt               DateTime             @updatedAt
+  assetTransfersAsHolder  AssetTransfer[]      @relation("TransferNewHolder")
+  transferBatchesAsHolder AssetTransferBatch[] @relation("TransferBatchNewHolder")
+  transactions            ItemTransaction[]    @relation("PersonTransactions")
 
   @@index([studentId])
   @@index([type])
@@ -186,6 +190,7 @@ model InventoryItem {
   status          ItemStatus @default(GOOD_CONDITION)
 
   transfers                AssetTransfer[]           @relation("ItemTransfers")
+  transferLines            AssetTransferLine[]
   borrowRequests           BorrowRequest[]           @relation("BorrowRequests")
   category                 ItemCategory?             @relation("CategoryInventoryItems", fields: [categoryId], references: [id])
   project                  Project?                  @relation("ProjectInventory", fields: [projectId], references: [id])
@@ -247,14 +252,67 @@ model InventoryStock {
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 
-  inventoryItem  InventoryItem     @relation(fields: [inventoryItemId], references: [id], onDelete: Cascade)
-  stockMovements StockMovement[]
-  transactions   ItemTransaction[]
-  borrowRequests BorrowRequest[]
+  inventoryItem       InventoryItem       @relation(fields: [inventoryItemId], references: [id], onDelete: Cascade)
+  stockMovements      StockMovement[]
+  transactions        ItemTransaction[]
+  borrowRequests      BorrowRequest[]
+  transferSourceLines AssetTransferLine[] @relation("TransferSourceStock")
 
   @@unique([inventoryItemId, campus])
   @@index([campus])
   @@index([isActive])
+}
+
+/// The current, campus-aware transfer aggregate.  The older AssetTransfer
+/// table is deliberately retained as immutable legacy history.
+model AssetTransferBatch {
+  id                String         @id @default(uuid())
+  sourceCampus      Campus
+  destinationCampus Campus
+  transferDate      DateTime       @default(now())
+  reason            String?
+  transferredById   String
+  approvedById      String?
+  receivedById      String?
+  status            TransferStatus @default(PENDING)
+  approvedAt        DateTime?
+  rejectedAt        DateTime?
+  completedAt       DateTime?
+  decisionNotes     String?
+  newHolderId       String?
+  legacyBatchId     String?
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+
+  lines         AssetTransferLine[]
+  transferredBy User                @relation("TransferBatchTransferredBy", fields: [transferredById], references: [id])
+  approvedBy    User?               @relation("TransferBatchApprovedBy", fields: [approvedById], references: [id])
+  receivedBy    User?               @relation("TransferBatchReceivedBy", fields: [receivedById], references: [id])
+  newHolder     Person?             @relation("TransferBatchNewHolder", fields: [newHolderId], references: [id])
+
+  @@index([status])
+  @@index([sourceCampus])
+  @@index([destinationCampus])
+  @@index([transferDate])
+  @@index([legacyBatchId])
+}
+
+model AssetTransferLine {
+  id                     String   @id @default(uuid())
+  batchId                String
+  inventoryItemId        String
+  sourceInventoryStockId String?
+  quantity               Decimal  @db.Decimal(15, 4)
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+
+  batch                AssetTransferBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  inventoryItem        InventoryItem      @relation(fields: [inventoryItemId], references: [id], onDelete: Restrict)
+  sourceInventoryStock InventoryStock?    @relation("TransferSourceStock", fields: [sourceInventoryStockId], references: [id], onDelete: Restrict)
+
+  @@unique([batchId, inventoryItemId])
+  @@index([inventoryItemId])
+  @@index([sourceInventoryStockId])
 }
 
 model ItemTransaction {

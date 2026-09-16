@@ -83,6 +83,42 @@ export class InventoryLedgerService {
     if (changed.length !== 1) throw new BadRequestException('Insufficient reserved quantity.');
   }
 
+  /** Move an already-reserved amount between campus balances and leave an
+   * auditable movement at both ends.  Callers must keep this in the same
+   * transaction as their lifecycle state transition. */
+  async transferReserved(
+    tx: Prisma.TransactionClient,
+    entry: { inventoryItemId: string; sourceCampus: Campus; destinationCampus: Campus; quantity: Prisma.Decimal; performedById: string; referenceId: string },
+  ) {
+    if (entry.sourceCampus === entry.destinationCampus) throw new BadRequestException('Source and destination campuses must differ.');
+    if (entry.quantity.lessThanOrEqualTo(0)) throw new BadRequestException('Transfer quantity must be positive.');
+
+    await this.consumeReservation(tx, entry.inventoryItemId, entry.sourceCampus, entry.quantity);
+    const source = await tx.inventoryStock.findUniqueOrThrow({
+      where: { inventoryItemId_campus: { inventoryItemId: entry.inventoryItemId, campus: entry.sourceCampus } },
+    });
+    const destination = await tx.inventoryStock.upsert({
+      where: { inventoryItemId_campus: { inventoryItemId: entry.inventoryItemId, campus: entry.destinationCampus } },
+      create: { inventoryItemId: entry.inventoryItemId, campus: entry.destinationCampus, quantity: entry.quantity, reservedQuantity: new Prisma.Decimal(0), isActive: true },
+      update: { quantity: { increment: entry.quantity }, isActive: true },
+    });
+    const movementData = (inventoryStockId: string, campus: Campus, quantityChange: Prisma.Decimal, quantityAfter: Prisma.Decimal) => ({
+      movementType: quantityChange.isNegative() ? StockMovementType.WITHDRAWN : StockMovementType.RECEIVED,
+      quantityChange,
+      quantityAfter,
+      reason: `Asset transfer from ${entry.sourceCampus} to ${entry.destinationCampus}`,
+      referenceType: 'AssetTransferBatch',
+      referenceId: entry.referenceId,
+      inventoryItemId: entry.inventoryItemId,
+      inventoryStockId,
+      campus,
+      performedById: entry.performedById,
+    });
+    await tx.stockMovement.create({ data: movementData(source.id, entry.sourceCampus, entry.quantity.negated(), source.quantity) });
+    await tx.stockMovement.create({ data: movementData(destination.id, entry.destinationCampus, entry.quantity, destination.quantity) });
+    return { source, destination };
+  }
+
   async deactivateBalance(tx: Prisma.TransactionClient, inventoryItemId: string, campus: Campus) {
     const changed = await tx.inventoryStock.updateMany({
       where: { inventoryItemId, campus, quantity: 0, reservedQuantity: 0, isActive: true },

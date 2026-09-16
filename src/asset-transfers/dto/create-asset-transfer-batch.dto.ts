@@ -19,8 +19,25 @@ export class BatchTransferItemDto {
 }
 
 export class CreateAssetTransferBatchDto {
+  /** Explicit authoritative source balance campus. */
+  @IsOptional()
   @IsEnum(Campus)
-  toCampus: Campus;
+  sourceCampus?: Campus;
+
+  /** Explicit destination campus. */
+  @IsOptional()
+  @IsEnum(Campus)
+  destinationCampus?: Campus;
+
+  /** @deprecated Compatibility alias for sourceCampus. */
+  @IsOptional()
+  @IsEnum(Campus)
+  fromCampus?: Campus;
+
+  /** @deprecated Compatibility alias for destinationCampus. */
+  @IsEnum(Campus)
+  @IsOptional()
+  toCampus?: Campus;
 
   @IsOptional()
   @IsString()

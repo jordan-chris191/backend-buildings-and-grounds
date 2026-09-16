@@ -1,405 +1,128 @@
-import {
-  Injectable,
-  NotFoundException,
-  BadRequestException,
-  ConflictException,
-} from '@nestjs/common';
-import {
-  Prisma,
-  TransferStatus,
-  ItemStatus,
-  ItemType,
-  TransactionType,
-  Campus,
-  StockMovementType,   // ✅ Added
-} from '@prisma/client';
+import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { Prisma, StockMovementType, TransactionType, TransferStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditLogService } from '../audit-log/audit-log.service';
+import { InventoryLedgerService } from '../stock-movements/inventory-ledger.service';
 import { CreateAssetTransferBatchDto } from './dto/create-asset-transfer-batch.dto';
 import { ApproveAssetTransferBatchDto } from './dto/approve-asset-transfer-batch.dto';
 import { RejectAssetTransferBatchDto } from './dto/reject-asset-transfer-batch.dto';
-import { randomUUID } from 'crypto';
 
 @Injectable()
 export class AssetTransfersService {
-  constructor(
-    private readonly prisma: PrismaService,
-    private readonly auditLogService: AuditLogService,
-  ) {}
+  constructor(private readonly prisma: PrismaService, private readonly auditLogService: AuditLogService, private readonly ledger: InventoryLedgerService) {}
 
-  private defaultInclude = {
-    inventoryItem: true,
+  private readonly include = {
+    lines: { include: { inventoryItem: true, sourceInventoryStock: true } },
     transferredBy: { select: { id: true, firstName: true, lastName: true } },
     approvedBy: { select: { id: true, firstName: true, lastName: true } },
     receivedBy: { select: { id: true, firstName: true, lastName: true } },
     newHolder: { select: { id: true, firstName: true, lastName: true } },
-  };
+  } as const;
 
-  // -------------------------------------------------------------------
-  // CREATE BATCH
-  // -------------------------------------------------------------------
+  private campuses(dto: CreateAssetTransferBatchDto) {
+    const sourceCampus = dto.sourceCampus ?? dto.fromCampus;
+    const destinationCampus = dto.destinationCampus ?? dto.toCampus;
+    if (!sourceCampus || !destinationCampus) throw new BadRequestException('sourceCampus and destinationCampus are required.');
+    if (sourceCampus === destinationCampus) throw new BadRequestException('Source and destination campuses must differ.');
+    return { sourceCampus, destinationCampus };
+  }
+
+  /** Keep the old response aliases while clients migrate to batch/line names. */
+  private response(batch: any) {
+    return {
+      ...batch,
+      batchId: batch.id,
+      fromCampus: batch.sourceCampus,
+      toCampus: batch.destinationCampus,
+      items: batch.lines,
+    };
+  }
+
   async createBatch(userId: string, dto: CreateAssetTransferBatchDto) {
-    if (!dto.items || dto.items.length === 0) {
-      throw new BadRequestException('At least one item is required.');
-    }
-
-    const batchId = randomUUID();
-
-    const createdTransfers = await this.prisma.$transaction(async (tx) => {
-      const transfers: any[] = [];
-
-      for (const itemDto of dto.items) {
-        const quantity = new Prisma.Decimal(itemDto.quantity);
-
-        if (quantity.lessThanOrEqualTo(0)) {
-          throw new BadRequestException('Quantity must be greater than zero.');
-        }
-
-        const inventoryItem = await tx.inventoryItem.findUnique({
-          where: { id: itemDto.inventoryItemId },
-        });
-
-        if (!inventoryItem) {
-          throw new NotFoundException(
-            `Inventory item ${itemDto.inventoryItemId} not found.`,
-          );
-        }
-
-        if (inventoryItem.status === ItemStatus.BORROWED) {
-          throw new BadRequestException(
-            `Item ${inventoryItem.id} is currently borrowed and cannot be transferred.`,
-          );
-        }
-
-        const stock = await tx.inventoryStock.findUnique({
-          where: { inventoryItemId_campus: { inventoryItemId: inventoryItem.id, campus: inventoryItem.campus } },
-        });
-        const available = stock ? stock.quantity.minus(stock.reservedQuantity) : new Prisma.Decimal(0);
-        if (available.lessThan(quantity)) {
-          throw new BadRequestException(
-            `Insufficient quantity for item ${inventoryItem.id}. Available: ${available}, requested: ${quantity}`,
-          );
-        }
-
-        const transfer = await tx.assetTransfer.create({
-          data: {
-            batchId,
-            fromCampus: inventoryItem.campus,
-            toCampus: dto.toCampus,
-            reason: dto.reason,
-            newHolderId: dto.newHolderId ?? null,
-            quantity,
-            status: TransferStatus.PENDING,
-            transferredById: userId,
-            inventoryItemId: itemDto.inventoryItemId,
-          },
-          include: this.defaultInclude,
-        });
-
-        transfers.push(transfer);
+    if (!dto.items?.length) throw new BadRequestException('At least one item is required.');
+    const { sourceCampus, destinationCampus } = this.campuses(dto);
+    const ids = dto.items.map(item => item.inventoryItemId);
+    if (new Set(ids).size !== ids.length) throw new ConflictException('A transfer batch cannot contain duplicate inventory items.');
+    const batch = await this.prisma.$transaction(async tx => {
+      const lines: { inventoryItemId: string; sourceInventoryStockId: string; quantity: Prisma.Decimal }[] = [];
+      for (const item of dto.items) {
+        const quantity = new Prisma.Decimal(item.quantity);
+        if (quantity.lessThanOrEqualTo(0)) throw new BadRequestException('Quantity must be greater than zero.');
+        const inventoryItem = await tx.inventoryItem.findUnique({ where: { id: item.inventoryItemId } });
+        if (!inventoryItem) throw new NotFoundException(`Inventory item ${item.inventoryItemId} not found.`);
+        if (!inventoryItem.isActive) throw new BadRequestException(`Inventory item ${item.inventoryItemId} is archived.`);
+        const stock = await tx.inventoryStock.findUnique({ where: { inventoryItemId_campus: { inventoryItemId: item.inventoryItemId, campus: sourceCampus } } });
+        if (!stock || !stock.isActive) throw new BadRequestException(`No active source stock exists for item ${item.inventoryItemId} at ${sourceCampus}.`);
+        lines.push({ inventoryItemId: item.inventoryItemId, sourceInventoryStockId: stock.id, quantity });
       }
-
-      return transfers;
-    });
-
-    await this.auditLogService.log({
-      action: 'CREATE',
-      entityType: 'AssetTransferBatch',
-      entityId: batchId,
-      description: `Batch transfer created with ${createdTransfers.length} items`,
-      performedById: userId,
-    });
-
-    return { batchId, items: createdTransfers };
+      return tx.assetTransferBatch.create({ data: { sourceCampus, destinationCampus, reason: dto.reason, newHolderId: dto.newHolderId ?? null, transferredById: userId, lines: { create: lines } }, include: this.include });
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+    await this.auditLogService.log({ action: 'CREATE', entityType: 'AssetTransferBatch', entityId: batch.id, description: `Transfer batch created with ${batch.lines.length} lines`, performedById: userId });
+    return this.response(batch);
   }
 
-  // -------------------------------------------------------------------
-  // GET BATCHES (GROUPED)
-  // -------------------------------------------------------------------
   async findBatches(status?: TransferStatus) {
-    const rows = await this.prisma.assetTransfer.findMany({
-      where: status ? { status } : {},
-      include: this.defaultInclude,
-      orderBy: { createdAt: 'desc' },
-    });
-
-    const groupedMap = new Map<string, any>();
-
-    for (const row of rows) {
-      const existing = groupedMap.get(row.batchId);
-
-      if (!existing) {
-        groupedMap.set(row.batchId, {
-          batchId: row.batchId,
-          fromCampus: [row.fromCampus],
-          toCampus: row.toCampus,
-          reason: row.reason,
-          newHolder: row.newHolder,
-          transferredBy: row.transferredBy,
-          approvedBy: row.approvedBy,
-          receivedBy: row.receivedBy,
-          status: row.status,
-          createdAt: row.createdAt,
-          approvedAt: row.approvedAt,
-          rejectedAt: row.rejectedAt,
-          completedAt: row.completedAt,
-          decisionNotes: row.decisionNotes,
-          items: [row],
-        });
-      } else {
-        existing.items.push(row);
-        if (!existing.fromCampus.includes(row.fromCampus)) {
-          existing.fromCampus.push(row.fromCampus);
-        }
-      }
-    }
-
-    return Array.from(groupedMap.values());
+    const batches = await this.prisma.assetTransferBatch.findMany({ where: status ? { status } : {}, include: this.include, orderBy: { createdAt: 'desc' } });
+    return batches.map(batch => this.response(batch));
   }
 
-  // -------------------------------------------------------------------
-  // APPROVE BATCH
-  // -------------------------------------------------------------------
-  async approveBatch(
-    batchId: string,
-    userId: string,
-    dto: ApproveAssetTransferBatchDto,
-  ) {
-    await this.prisma.$transaction(async (tx) => {
-      const rows = await tx.assetTransfer.findMany({
-        where: { batchId },
-        include: { inventoryItem: true },
-      });
-
-      if (rows.length === 0) {
-        throw new NotFoundException('Transfer batch not found.');
-      }
-
-      if (rows.some((r) => r.status !== TransferStatus.PENDING)) {
-        throw new ConflictException('Only PENDING batches can be approved.');
-      }
-
-      for (const row of rows) {
-        const item = row.inventoryItem;
-        if (!item) {
-          throw new NotFoundException(
-            `Inventory item ${row.inventoryItemId} not found.`,
-          );
-        }
-        if (item.status === ItemStatus.RESERVED) {
-          throw new ConflictException(`Item ${item.id} is already reserved.`);
-        }
-        if (
-          item.status === ItemStatus.BORROWED ||
-          item.status === ItemStatus.DISPOSED
-        ) {
-          throw new ConflictException(
-            `Item ${item.id} is not available for transfer.`,
-          );
-        }
-      }
-
-      await tx.assetTransfer.updateMany({
-        where: { batchId, status: TransferStatus.PENDING },
-        data: {
-          status: TransferStatus.APPROVED,
-          approvedById: userId,
-          approvedAt: new Date(),
-          decisionNotes: dto.notes ?? undefined,
-        },
-      });
-
-      for (const row of rows) {
-        await tx.inventoryItem.update({
-          where: { id: row.inventoryItemId },
-          data: { status: ItemStatus.RESERVED },
-        });
-      }
-    });
-
-    await this.auditLogService.log({
-      action: 'APPROVE',
-      entityType: 'AssetTransferBatch',
-      entityId: batchId,
-      description: `Batch transfer approved by user ${userId}`,
-      performedById: userId,
-    });
-
+  async approveBatch(batchId: string, userId: string, dto: ApproveAssetTransferBatchDto) {
+    await this.prisma.$transaction(async tx => {
+      const batch = await tx.assetTransferBatch.findUnique({ where: { id: batchId }, include: { lines: true } });
+      if (!batch) throw new NotFoundException('Transfer batch not found.');
+      if (batch.status !== TransferStatus.PENDING) throw new ConflictException('Only PENDING batches can be approved.');
+      for (const line of batch.lines) await this.ledger.reserve(tx, line.inventoryItemId, batch.sourceCampus, line.quantity);
+      const changed = await tx.assetTransferBatch.updateMany({ where: { id: batchId, status: TransferStatus.PENDING }, data: { status: TransferStatus.APPROVED, approvedById: userId, approvedAt: new Date(), decisionNotes: dto.notes ?? null } });
+      if (changed.count !== 1) throw new ConflictException('Transfer batch state changed concurrently.');
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+    await this.auditLogService.log({ action: 'APPROVE', entityType: 'AssetTransferBatch', entityId: batchId, description: `Transfer batch approved by user ${userId}`, performedById: userId });
     return { batchId, status: TransferStatus.APPROVED };
   }
 
-  // -------------------------------------------------------------------
-  // REJECT BATCH
-  // -------------------------------------------------------------------
-  async rejectBatch(
-    batchId: string,
-    userId: string,
-    dto: RejectAssetTransferBatchDto,
-  ) {
-    await this.prisma.$transaction(async (tx) => {
-      const rows = await tx.assetTransfer.findMany({
-        where: { batchId },
-        include: { inventoryItem: true },
-      });
-
-      if (rows.length === 0) {
-        throw new NotFoundException('Transfer batch not found.');
-      }
-
-      const validStatuses: TransferStatus[] = [
-        TransferStatus.PENDING,
-        TransferStatus.APPROVED,
-      ];
-      if (rows.some((r) => !validStatuses.includes(r.status))) {
-        throw new ConflictException(
-          'Batch cannot be rejected from its current state.',
-        );
-      }
-
-      const wasApproved = rows.some(
-        (r) => r.status === TransferStatus.APPROVED,
-      );
-
-      await tx.assetTransfer.updateMany({
-        where: { batchId, status: { in: validStatuses } },
-        data: {
-          status: TransferStatus.REJECTED,
-          rejectedAt: new Date(),
-          decisionNotes: dto.notes ?? undefined,
-        },
-      });
-
-      if (wasApproved) {
-        for (const row of rows) {
-          const item = await tx.inventoryItem.findUnique({
-            where: { id: row.inventoryItemId },
-          });
-          if (item?.status === ItemStatus.RESERVED) {
-            await tx.inventoryItem.update({
-              where: { id: row.inventoryItemId },
-              data: { status: ItemStatus.GOOD_CONDITION },
-            });
-          }
-        }
-      }
-    });
-
-    await this.auditLogService.log({
-      action: 'REJECT',
-      entityType: 'AssetTransferBatch',
-      entityId: batchId,
-      description: `Batch transfer rejected by user ${userId}`,
-      performedById: userId,
-    });
-
+  async rejectBatch(batchId: string, userId: string, dto: RejectAssetTransferBatchDto) {
+    await this.prisma.$transaction(async tx => {
+      const batch = await tx.assetTransferBatch.findUnique({ where: { id: batchId }, include: { lines: true } });
+      if (!batch) throw new NotFoundException('Transfer batch not found.');
+      if (batch.status !== TransferStatus.PENDING && batch.status !== TransferStatus.APPROVED) throw new ConflictException('Batch cannot be rejected from its current state.');
+      if (batch.status === TransferStatus.APPROVED) for (const line of batch.lines) await this.ledger.releaseReservation(tx, line.inventoryItemId, batch.sourceCampus, line.quantity);
+      const changed = await tx.assetTransferBatch.updateMany({ where: { id: batchId, status: batch.status }, data: { status: TransferStatus.REJECTED, rejectedAt: new Date(), decisionNotes: dto.notes ?? null } });
+      if (changed.count !== 1) throw new ConflictException('Transfer batch state changed concurrently.');
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+    await this.auditLogService.log({ action: 'REJECT', entityType: 'AssetTransferBatch', entityId: batchId, description: `Transfer batch rejected by user ${userId}`, performedById: userId });
     return { batchId, status: TransferStatus.REJECTED };
   }
 
-  // -------------------------------------------------------------------
-  // RECEIVE BATCH (UPDATED WITH STOCK MOVEMENT)
-  // -------------------------------------------------------------------
   async receiveBatch(batchId: string, userId: string) {
-    await this.prisma.$transaction(async (tx) => {
-      const rows = await tx.assetTransfer.findMany({
-        where: { batchId },
-        include: { inventoryItem: true },
-      });
-
-      if (rows.length === 0) {
-        throw new NotFoundException('Transfer batch not found.');
-      }
-
-      if (rows.some((r) => r.status !== TransferStatus.APPROVED)) {
-        throw new ConflictException('Only APPROVED batches can be received.');
-      }
-
-      for (const row of rows) {
-        // Move item to destination campus and set good condition
-        await tx.inventoryItem.update({
-          where: { id: row.inventoryItemId },
-          data: {
-            campus: row.toCampus,
-            status: ItemStatus.GOOD_CONDITION,
-          },
-        });
-
-        // If a new holder is assigned, create an issuance transaction
-        if (row.newHolderId) {
-          const controlNumber = await this.generateTransactionControlNumber(
-            tx,
-          );
-
-          await tx.itemTransaction.create({
-            data: {
-              controlNumber,
-              transactionType: TransactionType.ISSUANCE,
-              inventoryItemId: row.inventoryItemId,
-              quantity: row.quantity,
-              personId: row.newHolderId,
-              custodianId: userId, // receivedById
-              transactionDate: new Date(),
-              notes: `Asset transfer ${row.batchId} received`,
-            },
-          });
+    await this.prisma.$transaction(async tx => {
+      const batch = await tx.assetTransferBatch.findUnique({ where: { id: batchId }, include: { lines: true } });
+      if (!batch) throw new NotFoundException('Transfer batch not found.');
+      if (batch.status !== TransferStatus.APPROVED) throw new ConflictException('Only APPROVED batches can be received.');
+      for (const line of batch.lines) {
+        const transfer = await this.ledger.transferReserved(tx, { inventoryItemId: line.inventoryItemId, sourceCampus: batch.sourceCampus, destinationCampus: batch.destinationCampus, quantity: line.quantity, performedById: userId, referenceId: batchId });
+        // Preserve the established optional-holder behavior, but issue from the
+        // destination balance and use the shared ISS counter namespace.
+        if (batch.newHolderId) {
+          const transaction = await tx.itemTransaction.create({ data: {
+            controlNumber: await this.generateIssuanceControlNumber(tx), transactionType: TransactionType.ISSUANCE,
+            inventoryItemId: line.inventoryItemId, inventoryStockId: transfer.destination.id, campus: batch.destinationCampus,
+            quantity: line.quantity, personId: batch.newHolderId, custodianId: userId, notes: `Asset transfer ${batchId} received`,
+          } });
+          await this.ledger.apply(tx, { inventoryItemId: line.inventoryItemId, campus: batch.destinationCampus, quantityChange: line.quantity.negated(), movementType: StockMovementType.WITHDRAWN, performedById: userId, reason: `Issued to transfer holder from ${batchId}`, referenceType: 'ItemTransaction', referenceId: transaction.id });
         }
-
-        // ✅ Record the transfer as a stock movement (zero quantity change)
-        const stock = await tx.inventoryStock.findUniqueOrThrow({
-          where: { inventoryItemId_campus: { inventoryItemId: row.inventoryItemId, campus: row.fromCampus } },
-        });
-        await tx.stockMovement.create({
-          data: {
-            movementType: StockMovementType.ADJUSTED,
-            quantityChange: new Prisma.Decimal(0),
-            quantityAfter: stock.quantity,
-            reason: `Item transferred from ${row.fromCampus} to ${row.toCampus}`,
-            referenceType: 'AssetTransfer',
-            referenceId: batchId,
-            inventoryItemId: row.inventoryItemId,
-            inventoryStockId: stock.id,
-            campus: row.fromCampus,
-            performedById: userId,
-          },
-        });
       }
-
-      await tx.assetTransfer.updateMany({
-        where: { batchId, status: TransferStatus.APPROVED },
-        data: {
-          status: TransferStatus.COMPLETED,
-          receivedById: userId,
-          completedAt: new Date(),
-        },
-      });
-    });
-
-    await this.auditLogService.log({
-      action: 'RECEIVE',
-      entityType: 'AssetTransferBatch',
-      entityId: batchId,
-      description: `Batch transfer received by user ${userId}`,
-      performedById: userId,
-    });
-
+      const changed = await tx.assetTransferBatch.updateMany({ where: { id: batchId, status: TransferStatus.APPROVED }, data: { status: TransferStatus.COMPLETED, receivedById: userId, completedAt: new Date() } });
+      if (changed.count !== 1) throw new ConflictException('Transfer batch state changed concurrently.');
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+    await this.auditLogService.log({ action: 'RECEIVE', entityType: 'AssetTransferBatch', entityId: batchId, description: `Transfer batch received by user ${userId}`, performedById: userId });
     return { batchId, status: TransferStatus.COMPLETED };
   }
 
-  // -------------------------------------------------------------------
-  // Helper: Generate sequential control number for transactions
-  // -------------------------------------------------------------------
-  private async generateTransactionControlNumber(
-    tx: Prisma.TransactionClient,
-  ): Promise<string> {
+  private async generateIssuanceControlNumber(tx: Prisma.TransactionClient) {
     const year = new Date().getFullYear();
-    const type = 'ISS';
-
     const counter = await tx.sequenceCounter.upsert({
-      where: { type_year: { type, year } },
-      update: { count: { increment: 1 } },
-      create: { type, year, count: 1 },
+      where: { type_year: { type: 'ITEM_TRANSACTION_ISS', year } },
+      update: { count: { increment: 1 } }, create: { type: 'ITEM_TRANSACTION_ISS', year, count: 1 },
     });
-
-    const sequence = counter.count.toString().padStart(5, '0');
-    return `${type}-${year}-${sequence}`;
+    return `ISS-${year}-${String(counter.count).padStart(4, '0')}`;
   }
 }
