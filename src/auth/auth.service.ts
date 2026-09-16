@@ -335,7 +335,10 @@ export class AuthService {
       throw new NotFoundException('User not found');
     }
 
-    return user;
+    return {
+      ...user,
+      name: `${user.firstName} ${user.lastName}`.trim(),
+    };
   }
 
   // ---------------------------------------------------------
