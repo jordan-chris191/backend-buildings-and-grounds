@@ -51,6 +51,11 @@ async function main() {
   const online = await work.create(faculty.id, { requestType: RequestType.REPAIR, campus: Campus.MC1, requestingOfficeId: office.id });
   check(online.source === WorkRequestSource.ONLINE && online.requestedById === faculty.id && online.createdById === faculty.id, 'online creation regressed provenance');
   check(realtimeEvents.some(event => event.workRequestId === online.id && event.maintenanceScheduleId === null), 'online creation did not emit a realtime update');
+  await work.reject(online.id, bg.id, { reason: 'normal rejection remains allowed' });
+  check((await prisma.workRequest.findUniqueOrThrow({ where: { id: online.id } })).approvalStatus === 'REJECTED', 'normal online work request could not be rejected');
+  const rejectableWalkIn = await work.createWalkIn(bg.id, { ...dto, walkInRequesterName: 'Rejectable walk-in' });
+  await work.reject(rejectableWalkIn.id, bg.id, { reason: 'normal walk-in rejection remains allowed' });
+  check((await prisma.workRequest.findUniqueOrThrow({ where: { id: rejectableWalkIn.id } })).approvalStatus === 'REJECTED', 'normal walk-in work request could not be rejected');
   const edited = await work.update(walkIn.id, bg.id, { particulars: 'edited', walkInRequesterContact: '0999', requestType: RequestType.INSTALLATION });
   check(edited.particulars === 'edited' && edited.walkInRequesterContact === '0999' && edited.requestType === RequestType.INSTALLATION, 'pending walk-in update failed');
   check(realtimeEvents.filter(event => event.workRequestId === walkIn.id).length >= 2, 'walk-in update did not emit a realtime update');
@@ -70,7 +75,7 @@ async function main() {
   check(realtimeEvents.filter(event => event.workRequestId === cancellable.id).length === 2, 'cancellation did not emit exactly one additional realtime update');
   await fails(() => work.remove(walkIn.id, bg.id));
   check((await prisma.workRequest.count({ where: { source: WorkRequestSource.ONLINE } })) > 0, 'migration backfill left no valid online provenance');
-  console.log(`phase6 walk-in work-request integration passed: ${checks}/10 assertions`);
+  console.log(`phase6 walk-in work-request integration passed: ${checks}/20 assertions`);
   await prisma.$disconnect();
 }
 

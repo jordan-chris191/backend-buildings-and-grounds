@@ -41,4 +41,8 @@ export class CreateMaintenanceScheduleDto {
   @IsOptional()
   @IsString()
   notes?: string;
+
+  @IsOptional()
+  @IsString()
+  defaultAssigneeId?: string;
 }

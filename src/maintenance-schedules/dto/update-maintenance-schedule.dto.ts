@@ -1,4 +1,4 @@
-import { IsInt, IsNumber, IsOptional, IsString, Min, MinLength } from 'class-validator';
+import { IsInt, IsNumber, IsOptional, IsString, Min, MinLength, ValidateIf } from 'class-validator';
 
 /** Only metadata and the interval for the schedule's existing basis are editable. */
 export class UpdateMaintenanceScheduleDto {
@@ -20,4 +20,9 @@ export class UpdateMaintenanceScheduleDto {
   @IsNumber()
   @Min(1)
   frequencyHours?: number;
+
+  @IsOptional()
+  @ValidateIf((_, value) => value !== null)
+  @IsString()
+  defaultAssigneeId?: string | null;
 }

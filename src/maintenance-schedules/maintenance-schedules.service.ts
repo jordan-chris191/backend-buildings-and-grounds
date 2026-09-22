@@ -15,7 +15,6 @@ import {
   RequestType,
   Prisma,
   MaintenanceBasis,
-  AssetTypeConfig,
 } from '@prisma/client';
 
 @Injectable()
@@ -55,6 +54,15 @@ export class MaintenanceSchedulesService {
     createdBy: {
       select: { id: true, firstName: true, lastName: true },
     },
+    defaultAssignee: {
+      select: {
+        id: true,
+        firstName: true,
+        lastName: true,
+        email: true,
+        position: { select: { id: true, name: true } },
+      },
+    },
     workRequests: true,
   };
 
@@ -70,6 +78,33 @@ export class MaintenanceSchedulesService {
       },
     },
   };
+
+  private async validateDefaultAssignee(
+    defaultAssigneeId: string,
+    assetType: string | undefined,
+    client: Prisma.TransactionClient | PrismaService = this.prisma,
+  ) {
+    const assignee = await client.user.findUnique({
+      where: { id: defaultAssigneeId },
+      include: { role: true, position: true },
+    });
+    if (!assignee) throw new BadRequestException('Default maintenance assignee does not exist.');
+    if (!assignee.isActive) throw new BadRequestException('Default maintenance assignee must be active.');
+    if (assignee.role.code !== 'CAMPUS_STAFF') {
+      throw new BadRequestException('Default maintenance assignee must have the CAMPUS_STAFF role.');
+    }
+    if (!assignee.position?.isActive) {
+      throw new BadRequestException('Default maintenance assignee must have an active Position.');
+    }
+
+    if (assetType) {
+      const config = await client.assetTypeConfig.findUnique({ where: { assetType: assetType as any } });
+      if (config?.isActive && config.positionId !== assignee.positionId) {
+        throw new BadRequestException('Default maintenance assignee does not match the Position required for this asset type.');
+      }
+    }
+    return assignee;
+  }
 
   async create(userId: string, dto: CreateMaintenanceScheduleDto) {
     // Step 1: validate the item exists and is tagged as maintainable
@@ -117,6 +152,10 @@ export class MaintenanceSchedulesService {
       );
     }
 
+    const defaultAssignee = dto.defaultAssigneeId
+      ? await this.validateDefaultAssignee(dto.defaultAssigneeId, item.maintainableAssetProfile.assetType)
+      : null;
+
     const activeSchedule = await this.prisma.maintenanceSchedule.findFirst({
       where: {
         inventoryItemId: dto.inventoryItemId,
@@ -157,6 +196,7 @@ export class MaintenanceSchedulesService {
           notes: dto.notes,
           inventoryItemId: dto.inventoryItemId,
           createdById: userId,
+          defaultAssigneeId: defaultAssignee?.id,
         },
         include: this.defaultInclude,
         });
@@ -171,7 +211,7 @@ export class MaintenanceSchedulesService {
           );
           generatedWorkRequestId = workRequest.id;
         }
-        await this.auditLogService.log({ action: 'CREATE', entityType: 'MaintenanceSchedule', entityId: created.id, description: `Created maintenance schedule "${created.title}" (${created.basis}) for item ${item.name}`, performedById: userId }, tx);
+        await this.auditLogService.log({ action: 'CREATE', entityType: 'MaintenanceSchedule', entityId: created.id, description: `Created maintenance schedule "${created.title}" (${created.basis}) for item ${item.name}${defaultAssignee ? ` with default assignee ${defaultAssignee.firstName} ${defaultAssignee.lastName}` : ''}`, performedById: userId }, tx);
         return { schedule: created, generatedWorkRequestId };
       }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
     } catch (error) {
@@ -249,39 +289,7 @@ export class MaintenanceSchedulesService {
       },
     });
 
-    await this.autoAssignByAssetType(
-      workRequest.id,
-      item.maintainableAssetProfile?.assetType,
-      client,
-    );
-
     return workRequest;
-  }
-
-  private async autoAssignByAssetType(
-    workRequestId: string,
-    assetType?: string,
-    client: Prisma.TransactionClient | PrismaService = this.prisma,
-  ) {
-    if (!assetType) return; // no profile/type — nothing to resolve, leave unassigned
-
-    const config = await client.assetTypeConfig.findUnique({
-      where: { assetType: assetType as any },
-    });
-    if (!config || !config.isActive) return; // no mapping configured — leave for manual assignment
-
-    const technicians = await client.user.findMany({
-      where: { positionId: config.positionId, isActive: true },
-    });
-    if (technicians.length === 0) return; // position has no active users — nothing to assign
-
-    await client.workRequestAssignment.createMany({
-      data: technicians.map((tech) => ({
-        workRequestId,
-        userId: tech.id,
-        role: 'MEMBER' as const,
-      })),
-    });
   }
 
   // Helper: generate reference number for auto-created work requests
@@ -332,6 +340,9 @@ export class MaintenanceSchedulesService {
       });
       if (openCycle) throw new ConflictException('Cannot change frequency while a generated maintenance work request is open.');
     }
+    const defaultAssignee = dto.defaultAssigneeId === undefined || dto.defaultAssigneeId === null
+      ? null
+      : await this.validateDefaultAssignee(dto.defaultAssigneeId, schedule.inventoryItem.maintainableAssetProfile?.assetType);
     // The current due date/threshold identifies the existing cycle. An interval
     // edit applies to the next advancement, preserving that cycle's identity.
     const updated = await this.prisma.maintenanceSchedule.update({
@@ -341,9 +352,22 @@ export class MaintenanceSchedulesService {
         notes: dto.notes,
         frequencyDays: dto.frequencyDays,
         frequencyHours: dto.frequencyHours === undefined ? undefined : new Prisma.Decimal(dto.frequencyHours),
+        ...(dto.defaultAssigneeId !== undefined && { defaultAssigneeId: defaultAssignee?.id ?? null }),
       },
     });
-    await this.auditLogService.log({ action: 'UPDATE', entityType: 'MaintenanceSchedule', entityId: id, description: `Updated maintenance schedule "${updated.title}"`, performedById: userId });
+    const previousName = schedule.defaultAssignee
+      ? `${schedule.defaultAssignee.firstName} ${schedule.defaultAssignee.lastName}`
+      : null;
+    const assignmentChange = dto.defaultAssigneeId === undefined
+      ? ''
+      : defaultAssignee
+        ? previousName
+          ? ` Changed default maintenance assignee from ${previousName} to ${defaultAssignee.firstName} ${defaultAssignee.lastName}.`
+          : ` Set default maintenance assignee to ${defaultAssignee.firstName} ${defaultAssignee.lastName}.`
+        : previousName
+          ? ` Cleared default maintenance assignee (${previousName}).`
+          : '';
+    await this.auditLogService.log({ action: 'UPDATE', entityType: 'MaintenanceSchedule', entityId: id, description: `Updated maintenance schedule "${updated.title}".${assignmentChange}`, performedById: userId });
     return this.findOne(id);
   }
 

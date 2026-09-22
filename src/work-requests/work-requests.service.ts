@@ -116,6 +116,87 @@ export class WorkRequestsService {
     }
   }
 
+  /** Maintenance requests are assigned only after approval, never at generation. */
+  private async assignMaintenanceWorkersAfterApproval(
+    tx: Prisma.TransactionClient,
+    wr: { id: string; referenceNo: string; maintenanceScheduleId: string },
+    approvedById: string,
+  ): Promise<Array<{ id: string; userId: string }>> {
+    const schedule = await tx.maintenanceSchedule.findUnique({
+      where: { id: wr.maintenanceScheduleId },
+      select: {
+        defaultAssigneeId: true,
+        inventoryItem: { select: { maintainableAssetProfile: { select: { assetType: true } } } },
+      },
+    });
+    if (!schedule) return [];
+
+    const activeAssignments = await tx.workRequestAssignment.findMany({
+      where: { workRequestId: wr.id, unassignedAt: null },
+      select: { userId: true, role: true },
+    });
+    const hasAssignment = (userId: string) => activeAssignments.some(assignment => assignment.userId === userId);
+    const assetType = schedule.inventoryItem.maintainableAssetProfile?.assetType;
+    const config = assetType
+      ? await tx.assetTypeConfig.findUnique({ where: { assetType } })
+      : null;
+
+    let assignees: Array<{ id: string; firstName: string; lastName: string }> = [];
+    if (schedule.defaultAssigneeId) {
+      const preferred = await tx.user.findFirst({
+        where: {
+          id: schedule.defaultAssigneeId,
+          isActive: true,
+          ...(config?.isActive && { positionId: config.positionId }),
+          role: { code: 'CAMPUS_STAFF', isActive: true },
+          position: { is: { isActive: true } },
+        },
+        select: { id: true, firstName: true, lastName: true },
+      });
+      if (preferred && !hasAssignment(preferred.id) && !activeAssignments.some(assignment => assignment.role === AssignmentRole.LEAD)) {
+        await tx.workRequestAssignment.create({
+          data: { workRequestId: wr.id, userId: preferred.id, role: AssignmentRole.LEAD },
+        });
+        assignees = [preferred];
+      }
+    }
+
+    // A legacy or concurrently-added active assignment is already an explicit
+    // per-cycle decision; never layer fallback workers on top of it.
+    if (assignees.length === 0 && activeAssignments.length === 0) {
+      if (config?.isActive) {
+        const fallbackWorkers = await tx.user.findMany({
+          where: {
+            positionId: config.positionId,
+            isActive: true,
+            role: { code: 'CAMPUS_STAFF', isActive: true },
+            position: { is: { isActive: true } },
+          },
+          select: { id: true, firstName: true, lastName: true },
+        });
+        for (const worker of fallbackWorkers.filter(worker => !hasAssignment(worker.id))) {
+          await tx.workRequestAssignment.create({
+            data: { workRequestId: wr.id, userId: worker.id, role: AssignmentRole.MEMBER },
+          });
+          assignees.push(worker);
+        }
+      }
+    }
+
+    if (assignees.length > 0) {
+      await this.auditLogService.log({
+        action: 'AUTO_ASSIGN', entityType: 'WorkRequest', entityId: wr.id,
+        description: `Automatically assigned maintenance work request ${wr.referenceNo} to ${assignees.map(worker => `${worker.firstName} ${worker.lastName}`).join(', ')}`,
+        performedById: approvedById,
+      }, tx);
+    }
+    return Promise.all(assignees.map(worker => this.notificationsService.createInTransaction(tx, {
+      type: 'WORK_REQUEST_ASSIGNED', title: 'New Work Assignment',
+      message: `${wr.referenceNo}: scheduled maintenance assignment`,
+      referenceNo: wr.referenceNo, userId: worker.id, workRequestId: wr.id,
+    })));
+  }
+
   private async notifyRequester(
     wr: { requestedById: string | null; referenceNo: string; id: string },
     data: { title: string; message: string; type?: string },
@@ -373,29 +454,37 @@ if (!allowedStatuses.includes(existing.status)) {
       throw new BadRequestException('This work request has already been reviewed.');
     }
 
-    const approved = await this.prisma.workRequest.updateMany({
-      where: { id, status: RequestStatus.PENDING, approvalStatus: ApprovalStatus.PENDING },
-      data: {
-        approvalStatus: ApprovalStatus.APPROVED,
-        approvalNotes: dto.notes,
-        approvedAt: new Date(),
-        approvedById: userId,
-      },
-    });
-    if (approved.count !== 1) throw new ConflictException('Work request was reviewed concurrently.');
-
-    await this.auditLogService.log({
-      action: 'APPROVE',
-      entityType: 'WorkRequest',
-      entityId: id,
-      description: `Approved work request ${wr.referenceNo}`,
-      performedById: userId,
-    });
+    let assignmentNotifications: Array<{ id: string; userId: string }> = [];
+    await this.prisma.$transaction(async tx => {
+      const approved = await tx.workRequest.updateMany({
+        where: { id, status: RequestStatus.PENDING, approvalStatus: ApprovalStatus.PENDING },
+        data: {
+          approvalStatus: ApprovalStatus.APPROVED,
+          approvalNotes: dto.notes,
+          approvedAt: new Date(),
+          approvedById: userId,
+        },
+      });
+      if (approved.count !== 1) throw new ConflictException('Work request was reviewed concurrently.');
+      if (wr.maintenanceScheduleId) {
+        assignmentNotifications = await this.assignMaintenanceWorkersAfterApproval(tx, {
+          id: wr.id, referenceNo: wr.referenceNo, maintenanceScheduleId: wr.maintenanceScheduleId,
+        }, userId);
+        if (assignmentNotifications.length > 0) {
+          await tx.workRequest.update({ where: { id }, data: { status: RequestStatus.ASSIGNED } });
+        }
+      }
+      await this.auditLogService.log({
+        action: 'APPROVE', entityType: 'WorkRequest', entityId: id,
+        description: `Approved work request ${wr.referenceNo}`, performedById: userId,
+      }, tx);
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
 
     await this.notifyRequester(wr, {
       title: 'Work request approved',
       message: `Your work request ${wr.referenceNo} has been approved.`,
     });
+    for (const notification of assignmentNotifications) this.notificationsService.emit(notification, notification.userId);
     this.emitWorkRequestUpdated(id, wr.maintenanceScheduleId);
 
     return this.findOne(id);
@@ -403,6 +492,9 @@ if (!allowedStatuses.includes(existing.status)) {
 
   async reject(id: string, userId: string, dto: RejectWorkRequestDto) {
     const wr = await this.findOne(id);
+    if (wr.maintenanceScheduleId) {
+      throw new ConflictException('Scheduled maintenance Work Requests cannot be rejected. Complete the maintenance, reschedule/defer it, or deactivate the Maintenance Schedule instead.');
+    }
     if (wr.status !== RequestStatus.PENDING) {
       throw new BadRequestException('Only pending work requests can be rejected.');
     }

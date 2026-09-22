@@ -46,6 +46,7 @@ model User {
   borrowRequestsRequested     BorrowRequest[]             @relation("BorrowRequester")
   transactionsAsCustodian     ItemTransaction[]           @relation("TransactionCustodian")
   createdMaintenanceSchedules MaintenanceSchedule[]       @relation("MaintenanceCreator")
+  defaultMaintenanceSchedules MaintenanceSchedule[]       @relation("MaintenanceDefaultAssignee")
   notifications               Notification[]              @relation("UserNotifications")
   passwordResetTokens         PasswordResetToken[]        @relation("UserPasswordResetTokens")
   refreshTokens               RefreshToken[]              @relation("UserRefreshTokens")
@@ -527,7 +528,9 @@ model MaintenanceSchedule {
   createdAt       DateTime         @default(now())
   inventoryItemId String
   createdById     String
+  defaultAssigneeId String?
   createdBy       User             @relation("MaintenanceCreator", fields: [createdById], references: [id])
+  defaultAssignee User?            @relation("MaintenanceDefaultAssignee", fields: [defaultAssigneeId], references: [id], onDelete: SetNull)
   inventoryItem   InventoryItem    @relation("ItemMaintenanceSchedules", fields: [inventoryItemId], references: [id], onDelete: Cascade)
   workRequests    WorkRequest[]    @relation("MaintenanceWorkRequests")
   runHourReadings RunHourReading[] @relation("ScheduleRunHourReadings") // NEW
@@ -539,6 +542,7 @@ model MaintenanceSchedule {
   @@index([isActive])
   @@index([isActive, nextDueAt])
   @@index([basis]) // NEW
+  @@index([defaultAssigneeId])
 }
 
 model MaintainableAssetProfile {
