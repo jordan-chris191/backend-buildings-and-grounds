@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditLogService } from '../audit-log/audit-log.service';
+import { BorrowRequestsGateway } from '../gateway/borrow-requests.gateway';
 import { RecordRunHoursDto } from './dto/record-run-hours.dto';
 import { CreateMaintenanceScheduleDto } from './dto/create-maintenance-schedule.dto';
 import { UpdateMaintenanceScheduleDto } from './dto/update-maintenance-schedule.dto';
@@ -22,6 +23,7 @@ export class MaintenanceSchedulesService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly auditLogService: AuditLogService,
+    private readonly gateway: BorrowRequestsGateway,
   ) {}
 
   private isActiveScheduleUniqueConstraint(error: unknown): boolean {
@@ -128,9 +130,12 @@ export class MaintenanceSchedulesService {
       );
     }
 
-    let schedule;
+    let result: {
+      schedule: { id: string };
+      generatedWorkRequestId: string | null;
+    };
     try {
-      schedule = await this.prisma.$transaction(async tx => {
+      result = await this.prisma.$transaction(async tx => {
         const created = await tx.maintenanceSchedule.create({
         data: {
           title: dto.title,
@@ -155,11 +160,19 @@ export class MaintenanceSchedulesService {
         },
         include: this.defaultInclude,
         });
+        let generatedWorkRequestId: string | null = null;
         if (dto.basis === MaintenanceBasis.CALENDAR) {
-          await this.createWorkRequestForSchedule(created, item, userId, tx, `calendar:${created.nextDueAt!.toISOString()}`);
+          const workRequest = await this.createWorkRequestForSchedule(
+            created,
+            item,
+            userId,
+            tx,
+            `calendar:${created.nextDueAt!.toISOString()}`,
+          );
+          generatedWorkRequestId = workRequest.id;
         }
         await this.auditLogService.log({ action: 'CREATE', entityType: 'MaintenanceSchedule', entityId: created.id, description: `Created maintenance schedule "${created.title}" (${created.basis}) for item ${item.name}`, performedById: userId }, tx);
-        return created;
+        return { schedule: created, generatedWorkRequestId };
       }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
     } catch (error) {
       // The partial unique index is the authoritative concurrency safeguard.
@@ -171,7 +184,14 @@ export class MaintenanceSchedulesService {
       throw error;
     }
 
-    return this.findOne(schedule.id);
+    if (result.generatedWorkRequestId) {
+      this.gateway.emitWorkRequestUpdated(
+        result.generatedWorkRequestId,
+        result.schedule.id,
+      );
+    }
+
+    return this.findOne(result.schedule.id);
   }
 
   private async createWorkRequestForSchedule(
@@ -234,6 +254,8 @@ export class MaintenanceSchedulesService {
       item.maintainableAssetProfile?.assetType,
       client,
     );
+
+    return workRequest;
   }
 
   private async autoAssignByAssetType(
@@ -359,7 +381,7 @@ export class MaintenanceSchedulesService {
   }
 
   private async generateDueCalendarWorkRequest(id: string, now: Date): Promise<boolean> {
-    return this.prisma.$transaction(async tx => {
+    const generated = await this.prisma.$transaction(async tx => {
       const locked = await tx.$queryRaw<{ id: string }[]>(Prisma.sql`
         SELECT "id" FROM "MaintenanceSchedule" WHERE "id" = ${id} FOR UPDATE`);
       if (locked.length !== 1) return false;
@@ -370,14 +392,20 @@ export class MaintenanceSchedulesService {
       const cycleKey = `calendar:${schedule.nextDueAt.toISOString()}`;
       if (await tx.workRequest.findFirst({ where: { maintenanceScheduleId: id, maintenanceCycleKey: cycleKey } })) return false;
       try {
-        await this.createWorkRequestForSchedule(schedule, schedule.inventoryItem, schedule.createdById, tx, cycleKey);
+        const workRequest = await this.createWorkRequestForSchedule(schedule, schedule.inventoryItem, schedule.createdById, tx, cycleKey);
+        await this.auditLogService.log({ action: 'AUTO_CREATE_WORK_REQUEST', entityType: 'MaintenanceSchedule', entityId: id, description: `Calendar due cycle ${cycleKey} generated`, performedById: schedule.createdById }, tx);
+        return { workRequestId: workRequest.id, maintenanceScheduleId: id };
       } catch (error: any) {
         if (error?.code === 'P2002') return false;
         throw error;
       }
-      await this.auditLogService.log({ action: 'AUTO_CREATE_WORK_REQUEST', entityType: 'MaintenanceSchedule', entityId: id, description: `Calendar due cycle ${cycleKey} generated`, performedById: schedule.createdById }, tx);
-      return true;
     });
+    if (!generated) return false;
+    this.gateway.emitWorkRequestUpdated(
+      generated.workRequestId,
+      generated.maintenanceScheduleId,
+    );
+    return true;
   }
 
   async complete(id: string, userId: string) {
@@ -433,7 +461,8 @@ export class MaintenanceSchedulesService {
   async recordRunHours(id: string, userId: string, dto: RecordRunHoursDto) {
     const newReading = new Prisma.Decimal(dto.hours);
 
-    await this.prisma.$transaction(async tx => {
+    const generatedWorkRequest = await this.prisma.$transaction(async tx => {
+      let generated: { id: string; maintenanceScheduleId: string } | null = null;
       // The lock makes the persisted schedule row the sole authority for both
       // the monotonic comparison and threshold-cycle generation.
       const locked = await tx.$queryRaw<{ id: string }[]>(Prisma.sql`
@@ -471,7 +500,11 @@ export class MaintenanceSchedulesService {
         });
         if (!existingCycle) {
           try {
-            await this.createWorkRequestForSchedule(updated, updated.inventoryItem, userId, tx, cycleKey);
+            const workRequest = await this.createWorkRequestForSchedule(updated, updated.inventoryItem, userId, tx, cycleKey);
+            generated = {
+              id: workRequest.id,
+              maintenanceScheduleId: id,
+            };
             await this.auditLogService.log({ action: 'AUTO_CREATE_WORK_REQUEST', entityType: 'MaintenanceSchedule', entityId: id, description: `Runtime threshold ${updated.nextDueAtHours} reached`, performedById: userId }, tx);
           } catch (error: any) {
             // Keep the unique index as defense in depth for non-runtime writers.
@@ -479,7 +512,15 @@ export class MaintenanceSchedulesService {
           }
         }
       }
+      return generated;
     });
+
+    if (generatedWorkRequest) {
+      this.gateway.emitWorkRequestUpdated(
+        generatedWorkRequest.id,
+        generatedWorkRequest.maintenanceScheduleId,
+      );
+    }
 
     return this.findOne(id);
   }

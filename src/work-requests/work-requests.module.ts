@@ -5,6 +5,7 @@ import { PrismaModule } from '../prisma/prisma.module';
 import { AuthModule } from '../auth/auth.module';
 import { AuditLogModule } from '../audit-log/audit-log.module';   // ← path correct?
 import { NotificationsModule } from 'src/notifications/notifications.module';
+import { GatewayModule } from '../gateway/gateway.module';
 
 @Module({
   imports: [
@@ -12,6 +13,7 @@ import { NotificationsModule } from 'src/notifications/notifications.module';
     AuthModule,
     AuditLogModule,   // ← must be here
     NotificationsModule,
+    GatewayModule,
   ],
   controllers: [WorkRequestsController],
   providers: [WorkRequestsService],

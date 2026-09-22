@@ -4,7 +4,7 @@ import { WorkRequestsService } from './work-requests.service';
 describe('WorkRequestsService authorization invariants', () => {
   const tx: any = { user: { findUnique: jest.fn() }, workRequestAssignment: { findFirst: jest.fn() } };
   const prisma: any = { user: { findUnique: jest.fn() } };
-  const service = new WorkRequestsService(prisma, {} as any, {} as any);
+  const service = new WorkRequestsService(prisma, {} as any, {} as any, {} as any);
   beforeEach(() => jest.resetAllMocks());
 
   it('prevents a normal requester from impersonating another requester', async () => {

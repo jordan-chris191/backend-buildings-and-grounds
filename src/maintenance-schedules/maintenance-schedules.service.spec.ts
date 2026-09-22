@@ -7,6 +7,7 @@ import {
 import { MaintenanceSchedulesService } from './maintenance-schedules.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditLogService } from '../audit-log/audit-log.service';
+import { BorrowRequestsGateway } from '../gateway/borrow-requests.gateway';
 import { MaintenanceBasis, Prisma } from '@prisma/client';
 
 const mockPrismaService = {
@@ -51,6 +52,10 @@ const mockAuditLogService = {
   log: jest.fn(),
 };
 
+const mockGateway = {
+  emitWorkRequestUpdated: jest.fn(),
+};
+
 describe('MaintenanceSchedulesService', () => {
   let service: MaintenanceSchedulesService;
 
@@ -65,6 +70,7 @@ describe('MaintenanceSchedulesService', () => {
         MaintenanceSchedulesService,
         { provide: PrismaService, useValue: mockPrismaService },
         { provide: AuditLogService, useValue: mockAuditLogService },
+        { provide: BorrowRequestsGateway, useValue: mockGateway },
       ],
     }).compile();
 

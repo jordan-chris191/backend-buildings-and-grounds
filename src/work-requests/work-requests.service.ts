@@ -26,6 +26,7 @@ import { ApproveWorkRequestDto } from './dto/approve-work-request.dto';
 import { RejectWorkRequestDto } from './dto/reject-work-request.dto';
 import { CreateWalkInWorkRequestDto } from './dto/create-walk-in-work-request.dto';
 import { formatAssignmentRole, formatWorkRequestType } from './work-request-display';
+import { BorrowRequestsGateway } from '../gateway/borrow-requests.gateway';
 
 const PRIVILEGED_ROLES = ['ADMINISTRATOR', 'BUILDING_GROUNDS_OFFICER'];
 
@@ -35,7 +36,12 @@ export class WorkRequestsService {
     private readonly prisma: PrismaService,
     private readonly auditLogService: AuditLogService,
     private readonly notificationsService: NotificationsService,
+    private readonly gateway: BorrowRequestsGateway,
   ) {}
+
+  private emitWorkRequestUpdated(workRequestId: string, maintenanceScheduleId: string | null = null) {
+    this.gateway.emitWorkRequestUpdated(workRequestId, maintenanceScheduleId);
+  }
 
   private readonly defaultInclude = {
     items: {
@@ -119,7 +125,7 @@ export class WorkRequestsService {
   }
 
   async create(userId: string, dto: CreateWorkRequestDto) {
-    return this.prisma.$transaction(async (tx) => {
+    const workRequest = await this.prisma.$transaction(async (tx) => {
       const requester = await this.requesterForCreate(tx, userId, dto.requestedById);
       const office = dto.requestingOfficeId ? await tx.office.findUnique({ where: { id: dto.requestingOfficeId } }) : requester.office;
       if (!office?.isActive) throw new BadRequestException('Requesting office must exist and be active.');
@@ -163,10 +169,12 @@ export class WorkRequestsService {
 
       return workRequest;
     });
+    this.emitWorkRequestUpdated(workRequest.id, workRequest.maintenanceScheduleId);
+    return workRequest;
   }
 
   async createWalkIn(userId: string, dto: CreateWalkInWorkRequestDto) {
-    return this.prisma.$transaction(async tx => {
+    const workRequest = await this.prisma.$transaction(async tx => {
       if (!dto.walkInRequesterName?.trim()) {
         throw new BadRequestException('Walk-in requester name is required.');
       }
@@ -195,6 +203,8 @@ export class WorkRequestsService {
       await this.auditLogService.log({ action: 'CREATE_WALK_IN', entityType: 'WorkRequest', entityId: workRequest.id, description: `Created walk-in work request ${referenceNo}`, metadata: { source: WorkRequestSource.WALK_IN }, performedById: userId }, tx);
       return workRequest;
     });
+    this.emitWorkRequestUpdated(workRequest.id, workRequest.maintenanceScheduleId);
+    return workRequest;
   }
 
   private async generateReferenceNo(): Promise<string> {
@@ -350,6 +360,7 @@ if (!allowedStatuses.includes(existing.status)) {
       description: `Updated work request ${existing.referenceNo}`,
       performedById: userId,
     });
+    this.emitWorkRequestUpdated(id, existing.maintenanceScheduleId);
     return updated;
   }
 
@@ -385,6 +396,7 @@ if (!allowedStatuses.includes(existing.status)) {
       title: 'Work request approved',
       message: `Your work request ${wr.referenceNo} has been approved.`,
     });
+    this.emitWorkRequestUpdated(id, wr.maintenanceScheduleId);
 
     return this.findOne(id);
   }
@@ -423,6 +435,7 @@ if (!allowedStatuses.includes(existing.status)) {
       title: 'Work request rejected',
       message: `Your work request ${wr.referenceNo} was rejected: ${dto.reason}`,
     });
+    this.emitWorkRequestUpdated(id, wr.maintenanceScheduleId);
 
     return this.findOne(id);
   }
@@ -445,6 +458,7 @@ if (!allowedStatuses.includes(existing.status)) {
       description: `Deleted work request ${wr.referenceNo}`,
       performedById: userId,
     });
+    this.emitWorkRequestUpdated(id, wr.maintenanceScheduleId);
 
     return { message: 'Work request deleted.' };
   }
@@ -499,6 +513,7 @@ if (!assignableStatuses.includes(wr.status)) {
       title: 'Work request assigned',
       message: `Your work request ${wr.referenceNo} has been assigned to a team.`,
     });
+    this.emitWorkRequestUpdated(id, wr.maintenanceScheduleId);
 
     return this.findOne(id);
   }
@@ -554,6 +569,7 @@ if (!assignableStatuses.includes(wr.status)) {
     });
 
     if (unassignedNotification) this.notificationsService.emit(unassignedNotification, assignment.userId);
+    this.emitWorkRequestUpdated(id, wr.maintenanceScheduleId);
 
     return this.findOne(id);
   }
@@ -617,6 +633,7 @@ if (!assignableStatuses.includes(wr.status)) {
       title: 'Progress updated',
       message: `Work request ${wr.referenceNo} is now ${progressPercent}% complete.`,
     });
+    this.emitWorkRequestUpdated(id, wr.maintenanceScheduleId);
 
     return this.findOne(id);
   }
@@ -678,6 +695,8 @@ if (!assignableStatuses.includes(wr.status)) {
           workRequestId: id,
         });
       }
+
+      this.emitWorkRequestUpdated(id, wr.maintenanceScheduleId);
 
       return this.findOne(id);
     }
@@ -782,6 +801,8 @@ if (!assignableStatuses.includes(wr.status)) {
       });
     }
 
+    this.emitWorkRequestUpdated(id, wr.maintenanceScheduleId);
+
     return updated;
   }
 
@@ -806,6 +827,7 @@ if (!assignableStatuses.includes(wr.status)) {
       await this.auditLogService.log({ action: 'CANCEL', entityType: 'WorkRequest', entityId: id, description: `Work request ${wr.referenceNo} cancelled`, performedById: userId }, tx);
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
     for (const notification of notifications) this.notificationsService.emit(notification, notification.userId);
+    this.emitWorkRequestUpdated(id, wr.maintenanceScheduleId);
 
     return { message: 'Work request cancelled.' };
   }

@@ -6,8 +6,14 @@ import { WorkRequestsService } from '../src/work-requests/work-requests.service'
 const prisma = new PrismaService();
 const audit: any = { log: () => Promise.resolve() };
 const notifications: any = { create: () => Promise.resolve(), createInTransaction: (tx: any, data: any) => tx.notification.create({ data }), emit() {} };
-const maintenance = new MaintenanceSchedulesService(prisma, audit);
-const work = new WorkRequestsService(prisma, audit, notifications);
+const realtimeEvents: Array<{ workRequestId: string; maintenanceScheduleId: string | null }> = [];
+const gateway = {
+  emitWorkRequestUpdated: (workRequestId: string, maintenanceScheduleId: string | null) => {
+    realtimeEvents.push({ workRequestId, maintenanceScheduleId });
+  },
+} as any;
+const maintenance = new MaintenanceSchedulesService(prisma, audit, gateway);
+const work = new WorkRequestsService(prisma, audit, notifications, gateway);
 let checks = 0;
 function check(value: unknown, message: string): asserts value { if (!value) throw new Error(message); checks++; }
 async function fails(fn: () => Promise<unknown>) { try { await fn(); } catch { checks++; return; } throw new Error('Expected failure'); }
@@ -56,6 +62,7 @@ async function main() {
   const calendar = await maintenance.create(user.id, { title: 'calendar', basis: MaintenanceBasis.CALENDAR, inventoryItemId: calendarItem.id, frequencyDays: 7, nextDueAt: initialDue.toISOString() });
   const first = await prisma.workRequest.findFirstOrThrow({ where: { maintenanceScheduleId: calendar.id, maintenanceCycleKey: `calendar:${initialDue.toISOString()}` } });
   check(!!first, 'initial calendar cycle was not generated at creation');
+  check(realtimeEvents.some(event => event.workRequestId === first.id && event.maintenanceScheduleId === calendar.id), 'initial calendar work request did not emit a maintenance-scoped realtime event');
   await ready(first.id);
   const completedAt = new Date(Date.now() + 1_000);
   await work.complete(first.id, user.id, { dateTimeCompleted: completedAt.toISOString() }, 'CAMPUS_STAFF');
@@ -68,8 +75,10 @@ async function main() {
   const generated = await Promise.all([maintenance.processDueCalendarSchedules(), maintenance.processDueCalendarSchedules()]);
   const secondKey = `calendar:${due.toISOString()}`;
   check(generated.reduce((a, b) => a + b, 0) === 1 && (await prisma.workRequest.count({ where: { maintenanceScheduleId: calendar.id, maintenanceCycleKey: secondKey } })) === 1, 'concurrent scheduler execution created duplicate calendar cycles');
-  check((await maintenance.processDueCalendarSchedules()) === 0, 'scheduler was not idempotent for an open cycle');
   const second = await prisma.workRequest.findFirstOrThrow({ where: { maintenanceScheduleId: calendar.id, maintenanceCycleKey: secondKey } });
+  check(realtimeEvents.filter(event => event.workRequestId === second.id && event.maintenanceScheduleId === calendar.id).length === 1, 'scheduler did not emit exactly once for its newly generated cycle');
+  check((await maintenance.processDueCalendarSchedules()) === 0, 'scheduler was not idempotent for an open cycle');
+  check(realtimeEvents.filter(event => event.workRequestId === second.id).length === 1, 'idempotent scheduler emitted a fake realtime creation event');
   await ready(second.id);
   await work.complete(second.id, user.id, {}, 'CAMPUS_STAFF');
   const afterSecond = await prisma.maintenanceSchedule.findUniqueOrThrow({ where: { id: calendar.id } });

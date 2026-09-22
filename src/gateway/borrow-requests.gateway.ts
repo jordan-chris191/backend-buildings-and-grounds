@@ -88,4 +88,14 @@ export class BorrowRequestsGateway implements OnGatewayConnection, OnGatewayDisc
   broadcastToAll(event: string, data: any) {
     this.server.emit(event, data);
   }
+
+  /** Identifier-only invalidation hint; REST remains the authorization source. */
+  emitWorkRequestUpdated(workRequestId: string, maintenanceScheduleId: string | null = null) {
+    try {
+      this.broadcastToAll('work_request_updated', { workRequestId, maintenanceScheduleId });
+    } catch (error) {
+      // Socket delivery happens after commit and must not invalidate the write.
+      console.error('Failed to emit work_request_updated', error);
+    }
+  }
 }

@@ -32,6 +32,18 @@ describe('BorrowRequestsGateway authentication', () => {
     expect(to).not.toHaveBeenCalledWith('user:user-b');
   });
 
+  it('broadcasts identifier-only Work Request invalidation events', () => {
+    const emit = jest.fn();
+    (gateway as any).server = { emit };
+
+    gateway.emitWorkRequestUpdated('wr-1', 'schedule-1');
+
+    expect(emit).toHaveBeenCalledWith('work_request_updated', {
+      workRequestId: 'wr-1',
+      maintenanceScheduleId: 'schedule-1',
+    });
+  });
+
   it('disconnects every live socket for a revoked user', () => {
     const disconnect = jest.fn();
     (gateway as any).server = { sockets: { sockets: new Map([['a', { disconnect }]]) } };
