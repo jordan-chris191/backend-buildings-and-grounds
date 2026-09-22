@@ -16,11 +16,12 @@ describe('BorrowRequestsGateway authentication', () => {
     expect(socket.join).toHaveBeenCalledWith('user:user-a');
   });
 
-  it.each([undefined, 'invalid'])('rejects missing or invalid JWT', async token => {
+  it.each([undefined, 'invalid'])('rejects missing or invalid JWT without emitting a reserved event', async token => {
     if (token) jwt.verifyAsync.mockRejectedValue(new Error('invalid'));
     const socket = client(token);
     await gateway.handleConnection(socket);
     expect(socket.disconnect).toHaveBeenCalledWith(true);
+    expect(socket.emit).not.toHaveBeenCalled();
   });
 
   it('emits a targeted notification only to the authenticated user room', async () => {

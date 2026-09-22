@@ -36,7 +36,8 @@ export class BorrowRequestsGateway implements OnGatewayConnection, OnGatewayDisc
       sockets.add(client.id);
       this.connectedClients.set(user.id, sockets);
     } catch {
-      client.emit('connect_error', { message: 'Unauthorized socket connection' });
+      // `connect_error` is reserved by Socket.IO and may only be emitted by
+      // the transport during its own connection handshake.
       client.disconnect(true);
     }
   }
