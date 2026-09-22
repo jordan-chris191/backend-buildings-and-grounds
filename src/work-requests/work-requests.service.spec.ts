@@ -3,9 +3,9 @@ import { WorkRequestsService } from './work-requests.service';
 
 describe('WorkRequestsService authorization invariants', () => {
   const tx: any = { user: { findUnique: jest.fn() }, workRequestAssignment: { findFirst: jest.fn() } };
-  const prisma: any = { user: { findUnique: jest.fn() } };
+  const prisma: any = { user: { findUnique: jest.fn() }, workRequest: { findMany: jest.fn(), count: jest.fn() }, $transaction: jest.fn((operations: Promise<unknown>[]) => Promise.all(operations)) };
   const service = new WorkRequestsService(prisma, {} as any, {} as any, {} as any);
-  beforeEach(() => jest.resetAllMocks());
+  beforeEach(() => { jest.resetAllMocks(); prisma.$transaction.mockImplementation((operations: Promise<unknown>[]) => Promise.all(operations)); });
 
   it('prevents a normal requester from impersonating another requester', async () => {
     tx.user.findUnique.mockResolvedValueOnce({ id: 'actor', isActive: true, role: { code: 'FACULTY' } });
@@ -36,5 +36,15 @@ describe('WorkRequestsService authorization invariants', () => {
     await expect((service as any).readScopeForUser('faculty')).resolves.toEqual({
       OR: [{ requestedById: 'faculty' }, { requestingOfficeId: 'office-1' }],
     });
+  });
+
+  it('paginates the same scoped and filtered dataset used for its total', async () => {
+    prisma.user.findUnique.mockResolvedValue({ id: 'staff', isActive: true, role: { code: 'CAMPUS_STAFF', isActive: true } });
+    prisma.workRequest.findMany.mockResolvedValue([{ id: 'wr-2' }]);
+    prisma.workRequest.count.mockResolvedValue(11);
+    await expect(service.findAllForUser('staff', 'PENDING' as any, undefined, 'staff', false, 2, 10)).resolves.toEqual({ data: [{ id: 'wr-2' }], meta: { page: 2, limit: 10, total: 11, totalPages: 2 } });
+    const where = expect.objectContaining({ status: 'PENDING', isActive: true, assignments: { some: { userId: 'staff', unassignedAt: null } } });
+    expect(prisma.workRequest.findMany).toHaveBeenCalledWith(expect.objectContaining({ where, skip: 10, take: 10, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }] }));
+    expect(prisma.workRequest.count).toHaveBeenCalledWith({ where });
   });
 });

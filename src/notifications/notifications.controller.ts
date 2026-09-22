@@ -1,6 +1,7 @@
-import { Controller, Get, Patch, Param, Req, UseGuards } from '@nestjs/common';
+import { Controller, Get, Patch, Param, Query, Req, UseGuards } from '@nestjs/common';
 import { NotificationsService } from './notifications.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { QueryNotificationsDto } from './dto/query-notifications.dto';
 
 @UseGuards(JwtAuthGuard)
 @Controller('notifications')
@@ -8,8 +9,8 @@ export class NotificationsController {
   constructor(private notificationsService: NotificationsService) {}
 
   @Get()
-  findMine(@Req() req) {
-    return this.notificationsService.findMine(req.user.userId);
+  findMine(@Req() req, @Query() query: QueryNotificationsDto) {
+    return this.notificationsService.findMine(req.user.userId, query.page, query.limit);
   }
 
   @Get('unread-count')

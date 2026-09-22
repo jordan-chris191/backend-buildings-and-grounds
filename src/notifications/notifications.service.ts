@@ -54,11 +54,13 @@ export class NotificationsService {
   }
 
   /** Get all notifications for the logged‑in user */
-  async findMine(userId: string) {
-    return this.prisma.notification.findMany({
-      where: { userId },
-      orderBy: { createdAt: 'desc' },
-    });
+  async findMine(userId: string, page = 1, limit = 10) {
+    const where = { userId };
+    const [data, total] = await this.prisma.$transaction([
+      this.prisma.notification.findMany({ where, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], skip: (page - 1) * limit, take: limit }),
+      this.prisma.notification.count({ where }),
+    ]);
+    return { data, meta: { page, limit, total, totalPages: Math.ceil(total / limit) } };
   }
 
   /** Count unread notifications for the badge */

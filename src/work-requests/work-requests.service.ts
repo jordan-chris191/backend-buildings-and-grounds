@@ -359,10 +359,11 @@ export class WorkRequestsService {
     campus?: Campus,
     assignedToUserId?: string,
     includeInactive = false,
+    page = 1,
+    limit = 10,
   ) {
     const scope = await this.readScopeForUser(userId);
-    return this.prisma.workRequest.findMany({
-      where: {
+    const where: Prisma.WorkRequestWhereInput = {
         ...scope,
         ...(includeInactive ? {} : { isActive: true }),
         ...(status && { status }),
@@ -370,10 +371,16 @@ export class WorkRequestsService {
         ...(assignedToUserId && {
           assignments: { some: { userId: assignedToUserId, unassignedAt: null } },
         }),
-      },
-      include: this.defaultInclude,
-      orderBy: { createdAt: 'desc' },
-    });
+    };
+    const [data, total] = await this.prisma.$transaction([
+      this.prisma.workRequest.findMany({
+        where, include: this.defaultInclude,
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        skip: (page - 1) * limit, take: limit,
+      }),
+      this.prisma.workRequest.count({ where }),
+    ]);
+    return { data, meta: { page, limit, total, totalPages: Math.ceil(total / limit) } };
   }
 
   async findOneForUser(id: string, userId: string) {

@@ -10,7 +10,6 @@ import {
   Query,
   Req,
   UseGuards,
-  ParseEnumPipe,
 } from '@nestjs/common';
 import { WorkRequestsService } from './work-requests.service';
 import { CreateWorkRequestDto } from './dto/create-work-request.dto';
@@ -24,6 +23,7 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { RequestStatus, Campus } from '@prisma/client';
+import { QueryWorkRequestsDto } from './dto/query-work-requests.dto';
 
 @Controller('work-requests')
 export class WorkRequestsController {
@@ -47,19 +47,18 @@ export class WorkRequestsController {
   @Get()
   findAll(
     @Req() req,
-    @Query('status') status?: RequestStatus,
-    @Query('campus', new ParseEnumPipe(Campus, { optional: true })) campus?: Campus,
-    @Query('assignedToMe') assignedToMe?: string,
-    @Query('includeInactive') includeInactive?: string,
+    @Query() query: QueryWorkRequestsDto,
   ) {
-    const assignedToUserId = assignedToMe === 'true' ? req.user.userId : undefined;
-    const includeInactiveFlag = includeInactive === 'true';
+    const assignedToUserId = query.assignedToMe === 'true' ? req.user.userId : undefined;
+    const includeInactiveFlag = query.includeInactive === 'true';
     return this.workRequestsService.findAllForUser(
       req.user.userId,
-      status,
-      campus,
+      query.status,
+      query.campus,
       assignedToUserId,
       includeInactiveFlag,
+      query.page,
+      query.limit,
     );
   }
 
