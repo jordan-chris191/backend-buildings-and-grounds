@@ -13,6 +13,10 @@ import {
   Prisma,
   ApprovalStatus,
   WorkRequestSource,
+  WorkRequestActivityType,
+  ClarificationStatus,
+  CompletionOutcome,
+  HoldReason,
 } from '@prisma/client';
 
 import { PrismaService } from '../prisma/prisma.service';
@@ -27,6 +31,7 @@ import { RejectWorkRequestDto } from './dto/reject-work-request.dto';
 import { CreateWalkInWorkRequestDto } from './dto/create-walk-in-work-request.dto';
 import { formatAssignmentRole, formatWorkRequestType } from './work-request-display';
 import { BorrowRequestsGateway } from '../gateway/borrow-requests.gateway';
+import { ClarificationDto, CompleteOnBehalfDto, HoldWorkRequestDto, ManualInformDto, ProgressOnBehalfDto, ReassignWorkRequestDto, ReopenWorkRequestDto } from './dto/lifecycle-work-request.dto';
 
 const PRIVILEGED_ROLES = ['ADMINISTRATOR', 'BUILDING_GROUNDS_OFFICER'];
 
@@ -57,11 +62,20 @@ export class WorkRequestsService {
             firstName: true,
             lastName: true,
             email: true,
+            role: { select: { code: true } },
+            position: { select: { id: true, name: true } },
           },
         },
       },
     },
     accomplishment: true,
+    activities: {
+      orderBy: [{ occurredAt: 'desc' as const }, { id: 'desc' as const }],
+      include: {
+        actor: { select: { id: true, firstName: true, lastName: true, role: { select: { code: true } }, position: { select: { name: true } }, office: { select: { name: true } } } },
+        performedBy: { select: { id: true, firstName: true, lastName: true, role: { select: { code: true } }, position: { select: { name: true } } } },
+      },
+    },
     requestingOffice: true,
     requestedBy: {
       select: {
@@ -78,7 +92,13 @@ export class WorkRequestsService {
     rejectedBy: {
       select: { id: true, firstName: true, lastName: true },
     },
+    completionRecordedBy: { select: { id: true, firstName: true, lastName: true, role: { select: { code: true } }, position: { select: { name: true } } } },
+    completionPerformedBy: { select: { id: true, firstName: true, lastName: true, role: { select: { code: true } }, position: { select: { name: true } } } },
   };
+
+  private async activity(tx: Prisma.TransactionClient, data: { workRequestId: string; type: WorkRequestActivityType; actorId?: string; performedById?: string; metadata?: Prisma.InputJsonValue; occurredAt?: Date }) {
+    return tx.workRequestActivity.create({ data });
+  }
 
   private async requesterForCreate(tx: Prisma.TransactionClient, actorId: string, requestedById?: string) {
     const actor = await tx.user.findUnique({ where: { id: actorId }, include: { role: true } });
@@ -100,6 +120,13 @@ export class WorkRequestsService {
     if (!operationalRoles.includes(user.role.code)) throw new ForbiddenException('Operational role required.');
     const assignment = await tx.workRequestAssignment.findFirst({ where: { workRequestId, userId, unassignedAt: null } });
     if (!assignment) throw new ForbiddenException('An active assignment is required.');
+  }
+
+  private async authorizePrivilegedActor(tx: Prisma.TransactionClient, userId: string) {
+    const user = await tx.user.findUnique({ where: { id: userId }, include: { role: true } });
+    if (!user?.isActive || !user.role.isActive || !PRIVILEGED_ROLES.includes(user.role.code)) {
+      throw new ForbiddenException('Administrator or Building & Grounds Officer role required.');
+    }
   }
 
   private async validateMaterials(tx: Prisma.TransactionClient, items: CreateWorkRequestDto['items'], campus: Campus) {
@@ -247,6 +274,7 @@ export class WorkRequestsService {
         description: `Created work request ${referenceNo}`,
         performedById: userId,
       }, tx);
+      await this.activity(tx, { workRequestId: workRequest.id, type: WorkRequestActivityType.SUBMITTED, actorId: userId, performedById: requester.id, metadata: { source: WorkRequestSource.ONLINE } });
 
       return workRequest;
     });
@@ -282,6 +310,7 @@ export class WorkRequestsService {
         include: this.defaultInclude,
       });
       await this.auditLogService.log({ action: 'CREATE_WALK_IN', entityType: 'WorkRequest', entityId: workRequest.id, description: `Created walk-in work request ${referenceNo}`, metadata: { source: WorkRequestSource.WALK_IN }, performedById: userId }, tx);
+      await this.activity(tx, { workRequestId: workRequest.id, type: WorkRequestActivityType.SUBMITTED, actorId: userId, metadata: { source: WorkRequestSource.WALK_IN, walkInRequesterName: dto.walkInRequesterName } });
       return workRequest;
     });
     this.emitWorkRequestUpdated(workRequest.id, workRequest.maintenanceScheduleId);
@@ -356,6 +385,7 @@ export class WorkRequestsService {
   async findAllForUser(
     userId: string,
     status?: RequestStatus,
+    source?: WorkRequestSource,
     campus?: Campus,
     assignedToUserId?: string,
     includeInactive = false,
@@ -367,6 +397,7 @@ export class WorkRequestsService {
         ...scope,
         ...(includeInactive ? {} : { isActive: true }),
         ...(status && { status }),
+        ...(source && { source }),
         ...(campus && { campus }),
         ...(assignedToUserId && {
           assignments: { some: { userId: assignedToUserId, unassignedAt: null } },
@@ -381,6 +412,38 @@ export class WorkRequestsService {
       this.prisma.workRequest.count({ where }),
     ]);
     return { data, meta: { page, limit, total, totalPages: Math.ceil(total / limit) } };
+  }
+
+  async statsForUser(userId: string) {
+    const scope = await this.readScopeForUser(userId);
+    const base: Prisma.WorkRequestWhereInput = { ...scope, isActive: true };
+    const now = new Date();
+    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+    const nextMonthStart = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+    const metric = (where: Prisma.WorkRequestWhereInput): Prisma.WorkRequestWhereInput => ({ AND: [base, where] });
+    const validRating = { gte: 1, lte: 5 };
+    const accomplishmentScope: Prisma.WorkRequestAccomplishmentWhereInput = { workRequest: base };
+    const [pendingApproval, needsAssignment, assigned, inProgress, onHold, completedThisMonth, totalActive, ratedRequests, serviceRatings, expectationRatings] = await this.prisma.$transaction([
+      this.prisma.workRequest.count({ where: metric({ status: RequestStatus.PENDING, approvalStatus: ApprovalStatus.PENDING }) }),
+      this.prisma.workRequest.count({ where: metric({ status: RequestStatus.PENDING, approvalStatus: ApprovalStatus.APPROVED, assignments: { none: { unassignedAt: null } } }) }),
+      this.prisma.workRequest.count({ where: metric({ status: RequestStatus.ASSIGNED, assignments: { some: { unassignedAt: null } } }) }),
+      this.prisma.workRequest.count({ where: metric({ status: RequestStatus.IN_PROGRESS }) }),
+      this.prisma.workRequest.count({ where: metric({ status: RequestStatus.ON_HOLD }) }),
+      this.prisma.workRequest.count({ where: metric({ status: RequestStatus.COMPLETED, completedAt: { gte: monthStart, lt: nextMonthStart } }) }),
+      this.prisma.workRequest.count({ where: metric({ status: { in: [RequestStatus.PENDING, RequestStatus.ASSIGNED, RequestStatus.IN_PROGRESS, RequestStatus.ON_HOLD] } }) }),
+      this.prisma.workRequestAccomplishment.count({ where: { ...accomplishmentScope, OR: [{ serviceRating: validRating }, { expectationRating: validRating }] } }),
+      this.prisma.workRequestAccomplishment.aggregate({ where: { ...accomplishmentScope, serviceRating: validRating }, _count: { serviceRating: true }, _avg: { serviceRating: true } }),
+      this.prisma.workRequestAccomplishment.aggregate({ where: { ...accomplishmentScope, expectationRating: validRating }, _count: { expectationRating: true }, _avg: { expectationRating: true } }),
+    ]);
+    const ratingResponses = serviceRatings._count.serviceRating + expectationRatings._count.expectationRating;
+    const ratingTotal = (serviceRatings._avg.serviceRating ?? 0) * serviceRatings._count.serviceRating
+      + (expectationRatings._avg.expectationRating ?? 0) * expectationRatings._count.expectationRating;
+    return {
+      pendingApproval, needsAssignment, assigned, inProgress, onHold, completedThisMonth, totalActive,
+      ratedRequests,
+      ratingResponses,
+      averageRating: ratingResponses ? ratingTotal / ratingResponses : null,
+    };
   }
 
   async findOneForUser(id: string, userId: string) {
@@ -485,6 +548,7 @@ if (!allowedStatuses.includes(existing.status)) {
         action: 'APPROVE', entityType: 'WorkRequest', entityId: id,
         description: `Approved work request ${wr.referenceNo}`, performedById: userId,
       }, tx);
+      await this.activity(tx, { workRequestId: id, type: WorkRequestActivityType.APPROVED, actorId: userId, metadata: { notes: dto.notes } });
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
 
     await this.notifyRequester(wr, {
@@ -509,26 +573,26 @@ if (!allowedStatuses.includes(existing.status)) {
       throw new BadRequestException('This work request has already been reviewed.');
     }
 
-    const rejected = await this.prisma.workRequest.updateMany({
-      where: { id, status: RequestStatus.PENDING, approvalStatus: ApprovalStatus.PENDING },
-      data: {
+    const rejected = await this.prisma.$transaction(async tx => {
+      const changed = await tx.workRequest.updateMany({ where: { id, status: RequestStatus.PENDING, approvalStatus: ApprovalStatus.PENDING }, data: {
         approvalStatus: ApprovalStatus.REJECTED,
         rejectionReason: dto.reason,
         rejectedAt: new Date(),
         rejectedById: userId,
         status: RequestStatus.CANCELLED,
         isActive: false,
-      },
-    });
-    if (rejected.count !== 1) throw new ConflictException('Work request was reviewed concurrently.');
-
-    await this.auditLogService.log({
+      } });
+      if (changed.count !== 1) throw new ConflictException('Work request was reviewed concurrently.');
+      await this.auditLogService.log({
       action: 'REJECT',
       entityType: 'WorkRequest',
       entityId: id,
       description: `Rejected work request ${wr.referenceNo}: ${dto.reason}`,
-      performedById: userId,
-    });
+        performedById: userId,
+      }, tx);
+      await this.activity(tx, { workRequestId: id, type: WorkRequestActivityType.REJECTED, actorId: userId, metadata: { reason: dto.reason } });
+      return changed;
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
 
     await this.notifyRequester(wr, {
       title: 'Work request rejected',
@@ -596,6 +660,7 @@ if (!assignableStatuses.includes(wr.status)) {
         message: `${wr.referenceNo}: ${formatWorkRequestType(wr.requestType)} at ${wr.campus} (${formatAssignmentRole(dto.role)})`,
         referenceNo: wr.referenceNo, userId: dto.userId, workRequestId: id,
       });
+      await this.activity(tx, { workRequestId: id, type: WorkRequestActivityType.ASSIGNED, actorId: userId, performedById: dto.userId, metadata: { role: dto.role } });
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
 
     await this.auditLogService.log({
@@ -726,6 +791,7 @@ if (!assignableStatuses.includes(wr.status)) {
         }
       }
       await this.auditLogService.log({ action: 'PROGRESS_UPDATE', entityType: 'WorkRequest', entityId: id, description: `Progress set to ${progressPercent}%`, performedById: userId }, tx);
+      await this.activity(tx, { workRequestId: id, type: WorkRequestActivityType.PROGRESS_UPDATED, actorId: userId, performedById: userId, metadata: { progressPercent, note } });
     });
 
     await this.notifyRequester(wr, {
@@ -735,6 +801,81 @@ if (!assignableStatuses.includes(wr.status)) {
     this.emitWorkRequestUpdated(id, wr.maintenanceScheduleId);
 
     return this.findOne(id);
+  }
+
+  /** The sole state-changing completion pipeline. Provenance is explicit: the
+   * actor recorded the event; performedBy physically did the work. */
+  private async completeAuthoritatively(id: string, actorId: string, performedById: string, input: {
+    startedAt?: Date; completedAt: Date; completionDetails?: object; comments?: string;
+    outcome?: CompletionOutcome; onBehalfReason?: string; reasonNotes?: string;
+  }) {
+    const result = await this.prisma.$transaction(async tx => {
+      const wr = await tx.workRequest.findUnique({ where: { id }, include: { accomplishment: true, assignments: true } });
+      if (!wr) throw new NotFoundException('Work request not found.');
+      if (!([RequestStatus.ASSIGNED, RequestStatus.IN_PROGRESS] as RequestStatus[]).includes(wr.status)) throw new ConflictException('Work request cannot be completed in its current status.');
+      const assignment = wr.assignments.find(a => a.userId === performedById && !a.unassignedAt);
+      if (!assignment) throw new ForbiddenException('performedBy must have an active assignment.');
+      const startedAt = input.startedAt ?? wr.accomplishment?.dateTimeStarted ?? input.completedAt;
+      if (input.completedAt < startedAt) throw new BadRequestException('Completion time cannot be before start time.');
+      const outcome = input.outcome ?? CompletionOutcome.RESOLVED;
+      if (outcome !== CompletionOutcome.RESOLVED && !input.comments?.trim()) throw new BadRequestException('Completion notes are required for a non-resolved outcome.');
+      const changed = await tx.workRequest.updateMany({
+        where: { id, status: { in: [RequestStatus.ASSIGNED, RequestStatus.IN_PROGRESS] } },
+        data: { status: RequestStatus.COMPLETED, progressPercent: 100, completedAt: input.completedAt, completionOutcome: outcome, completionRecordedById: actorId, completionPerformedById: performedById },
+      });
+      if (changed.count !== 1) throw new ConflictException('Work request was completed concurrently.');
+      const accomplishmentData = { dateTimeStarted: startedAt, dateTimeCompleted: input.completedAt, completionDetails: input.completionDetails as Prisma.InputJsonValue, comments: input.comments };
+      if (wr.accomplishment) await tx.workRequestAccomplishment.update({ where: { id: wr.accomplishment.id }, data: accomplishmentData });
+      else await tx.workRequestAccomplishment.create({ data: { workRequestId: id, bgPersonnelId: performedById, ...accomplishmentData } });
+      if (wr.maintenanceScheduleId) {
+        const schedule = await tx.maintenanceSchedule.findUnique({ where: { id: wr.maintenanceScheduleId } });
+        if (!schedule?.isActive) throw new BadRequestException('Maintenance schedule is inactive.');
+        const scheduleData: Prisma.MaintenanceScheduleUpdateInput = { lastPerformedAt: input.completedAt };
+        if (schedule.basis === 'CALENDAR') {
+          if (!schedule.frequencyDays) throw new BadRequestException('Maintenance schedule is missing frequencyDays.');
+          scheduleData.nextDueAt = new Date(input.completedAt.getTime() + schedule.frequencyDays * 86_400_000);
+        } else {
+          if (!schedule.frequencyHours || !wr.maintenanceCycleKey?.startsWith('runtime:')) throw new BadRequestException('Maintenance runtime cycle is invalid.');
+          scheduleData.nextDueAtHours = new Prisma.Decimal(wr.maintenanceCycleKey.slice('runtime:'.length)).plus(schedule.frequencyHours);
+        }
+        await tx.maintenanceSchedule.update({ where: { id: schedule.id }, data: scheduleData });
+        await this.auditLogService.log({ action: 'ADVANCE_FROM_WORK_REQUEST', entityType: 'MaintenanceSchedule', entityId: schedule.id, description: `Advanced from completed maintenance work request ${wr.referenceNo}`, performedById: actorId }, tx);
+      }
+      const onBehalf = actorId !== performedById;
+      await this.activity(tx, { workRequestId: id, type: onBehalf ? WorkRequestActivityType.COMPLETED_ON_BEHALF : WorkRequestActivityType.COMPLETED, actorId, performedById, occurredAt: input.completedAt, metadata: { outcome, reason: input.onBehalfReason, reasonNotes: input.reasonNotes, recordedAt: new Date().toISOString() } });
+      await this.auditLogService.log({ action: onBehalf ? 'COMPLETE_ON_BEHALF' : 'COMPLETE', entityType: 'WorkRequest', entityId: id, description: `Work request ${wr.referenceNo} completed`, metadata: { actorId, performedById, actualCompletedAt: input.completedAt.toISOString(), reason: input.onBehalfReason, reasonNotes: input.reasonNotes, outcome }, performedById: actorId }, tx);
+      return { id: wr.id, referenceNo: wr.referenceNo, maintenanceScheduleId: wr.maintenanceScheduleId, requestedById: wr.requestedById };
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+    await this.notifyRequester(result, { type: 'WORK_REQUEST_COMPLETED', title: 'Work request completed', message: `Your work request ${result.referenceNo} has been completed.` });
+    this.emitWorkRequestUpdated(id, result.maintenanceScheduleId);
+    return this.findOne(id);
+  }
+
+  async progressOnBehalf(id: string, actorId: string, dto: ProgressOnBehalfDto) {
+    if (dto.reason === 'OTHER' && !dto.reasonNotes?.trim()) throw new BadRequestException('reasonNotes is required when reason is OTHER.');
+    const occurredAt = new Date(dto.actualOccurredAt);
+    const wr = await this.prisma.$transaction(async tx => {
+      await this.authorizePrivilegedActor(tx, actorId);
+      const current = await tx.workRequest.findUnique({ where: { id }, select: { id: true, status: true, referenceNo: true, maintenanceScheduleId: true, requestedById: true } });
+      if (!current) throw new NotFoundException('Work request not found.');
+      if (!([RequestStatus.ASSIGNED, RequestStatus.IN_PROGRESS] as RequestStatus[]).includes(current.status)) throw new ConflictException('Cannot update progress in the current status.');
+      const assignment = await tx.workRequestAssignment.findFirst({ where: { workRequestId: id, userId: dto.performedByUserId, unassignedAt: null } });
+      if (!assignment) throw new BadRequestException('performedBy must be actively assigned.');
+      const changed = await tx.workRequest.updateMany({ where: { id, status: { in: [RequestStatus.ASSIGNED, RequestStatus.IN_PROGRESS] } }, data: { progressPercent: dto.progressPercent, ...(dto.progressPercent > 0 && { status: RequestStatus.IN_PROGRESS }) } });
+      if (changed.count !== 1) throw new ConflictException('Work request state changed concurrently.');
+      await this.activity(tx, { workRequestId: id, type: WorkRequestActivityType.PROGRESS_RECORDED_ON_BEHALF, actorId, performedById: dto.performedByUserId, occurredAt, metadata: { progressPercent: dto.progressPercent, note: dto.note, reason: dto.reason, reasonNotes: dto.reasonNotes, recordedAt: new Date().toISOString() } });
+      await this.auditLogService.log({ action: 'PROGRESS_ON_BEHALF', entityType: 'WorkRequest', entityId: id, description: `Progress recorded on behalf at ${dto.progressPercent}%`, metadata: { actorId, performedById: dto.performedByUserId, actualOccurredAt: occurredAt.toISOString(), reason: dto.reason, reasonNotes: dto.reasonNotes }, performedById: actorId }, tx);
+      return current;
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+    await this.notifyRequester(wr, { title: 'Progress updated', message: `Work request ${wr.referenceNo} is now ${dto.progressPercent}% complete.` });
+    this.emitWorkRequestUpdated(id, wr.maintenanceScheduleId);
+    return this.findOne(id);
+  }
+
+  async completeOnBehalf(id: string, actorId: string, dto: CompleteOnBehalfDto) {
+    if (dto.reason === 'OTHER' && !dto.reasonNotes?.trim()) throw new BadRequestException('reasonNotes is required when reason is OTHER.');
+    await this.prisma.$transaction(tx => this.authorizePrivilegedActor(tx, actorId));
+    return this.completeAuthoritatively(id, actorId, dto.performedByUserId, { startedAt: dto.dateTimeStarted ? new Date(dto.dateTimeStarted) : undefined, completedAt: new Date(dto.actualCompletedAt), completionDetails: dto.completionDetails, comments: dto.comments, outcome: dto.outcome, onBehalfReason: dto.reason, reasonNotes: dto.reasonNotes });
   }
 
   async complete(
@@ -801,6 +942,20 @@ if (!assignableStatuses.includes(wr.status)) {
     }
 
     // ---------- 2. Staff completion (first time) ----------
+    // Authorization remains specific to the authenticated worker, while the
+    // mutation itself shares the same authoritative pipeline as on-behalf entry.
+    await this.prisma.$transaction(tx => this.authorizeOperationalActor(tx, id, userId, userRole));
+    return this.completeAuthoritatively(id, userId, userId, {
+      startedAt: dto.dateTimeStarted ? new Date(dto.dateTimeStarted) : undefined,
+      completedAt: dto.dateTimeCompleted ? new Date(dto.dateTimeCompleted) : new Date(),
+      completionDetails: dto.completionDetails as object,
+      comments: dto.comments,
+      outcome: dto.outcome ?? (dto.cannotBeRepaired ? CompletionOutcome.UNABLE_TO_REPAIR : CompletionOutcome.RESOLVED),
+    });
+
+    /* legacy completion implementation retained below temporarily for source
+       history; unreachable after the shared pipeline return. */
+    /*
     if (wr.status !== RequestStatus.IN_PROGRESS && wr.status !== RequestStatus.ASSIGNED) {
       throw new BadRequestException('Work request cannot be completed in its current status.');
     }
@@ -903,6 +1058,137 @@ if (!assignableStatuses.includes(wr.status)) {
     this.emitWorkRequestUpdated(id, wr.maintenanceScheduleId);
 
     return updated;
+    */
+  }
+
+  async reassign(id: string, actorId: string, dto: ReassignWorkRequestDto) {
+    if (dto.reason === 'OTHER' && !dto.reasonNotes?.trim()) throw new BadRequestException('reasonNotes is required when reason is OTHER.');
+    const result = await this.prisma.$transaction(async tx => {
+      await this.authorizePrivilegedActor(tx, actorId);
+      const wr = await tx.workRequest.findUnique({ where: { id }, include: { assignments: true } });
+      if (!wr) throw new NotFoundException('Work request not found.');
+      if (!([RequestStatus.ASSIGNED, RequestStatus.IN_PROGRESS, RequestStatus.ON_HOLD] as RequestStatus[]).includes(wr.status)) throw new ConflictException('Work request cannot be reassigned in its current status.');
+      const old = wr.assignments.find(a => a.id === dto.assignmentId && !a.unassignedAt);
+      if (!old) throw new BadRequestException('An active assignment is required for reassignment.');
+      const replacement = await tx.user.findFirst({ where: { id: dto.userId, isActive: true, role: { code: 'CAMPUS_STAFF', isActive: true }, position: { is: { isActive: true } } }, select: { id: true } });
+      if (!replacement) throw new BadRequestException('Replacement must be an active eligible CAMPUS_STAFF user.');
+      if (replacement.id === old.userId) throw new BadRequestException('Replacement must differ from the current assignee.');
+      const removed = await tx.workRequestAssignment.updateMany({ where: { id: old.id, unassignedAt: null }, data: { unassignedAt: new Date(), unassignedById: actorId, reassignmentReason: dto.reason, reassignmentReasonNotes: dto.reasonNotes } });
+      if (removed.count !== 1) throw new ConflictException('Assignment changed concurrently.');
+      await tx.workRequestAssignment.create({ data: { workRequestId: id, userId: replacement.id, role: old.role } });
+      const notification = await this.notificationsService.createInTransaction(tx, { type: 'WORK_REQUEST_ASSIGNED', title: 'New Work Assignment', message: `${wr.referenceNo}: you have been assigned to this work request.`, userId: replacement.id, workRequestId: id, referenceNo: wr.referenceNo });
+      await this.activity(tx, { workRequestId: id, type: WorkRequestActivityType.REASSIGNED, actorId, metadata: { previousAssigneeId: old.userId, newAssigneeId: replacement.id, reason: dto.reason, reasonNotes: dto.reasonNotes } });
+      await this.auditLogService.log({ action: 'REASSIGN', entityType: 'WorkRequest', entityId: id, description: `Reassigned work request ${wr.referenceNo}`, metadata: { previousAssigneeId: old.userId, newAssigneeId: replacement.id, reason: dto.reason, reasonNotes: dto.reasonNotes }, performedById: actorId }, tx);
+      return { wr, notification, replacementId: replacement.id };
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+    this.notificationsService.emit(result.notification, result.replacementId);
+    this.emitWorkRequestUpdated(id, result.wr.maintenanceScheduleId);
+    return this.findOne(id);
+  }
+
+  async acknowledge(id: string, assignmentId: string, userId: string) {
+    const changed = await this.prisma.$transaction(async tx => {
+      const actor = await tx.user.findUnique({ where: { id: userId }, include: { role: true } });
+      if (!actor?.isActive || !actor.role.isActive || actor.role.code !== 'CAMPUS_STAFF') {
+        throw new ForbiddenException('Only an active assigned CAMPUS_STAFF worker may acknowledge an assignment.');
+      }
+      const assignment = await tx.workRequestAssignment.updateMany({ where: { id: assignmentId, workRequestId: id, userId, unassignedAt: null, acknowledgedAt: null }, data: { acknowledgedAt: new Date() } });
+      if (!assignment.count) throw new ConflictException('Active unacknowledged assignment not found.');
+      await this.activity(tx, { workRequestId: id, type: WorkRequestActivityType.WORKER_ACKNOWLEDGED, actorId: userId, performedById: userId });
+      await this.auditLogService.log({ action: 'WORKER_ACKNOWLEDGED', entityType: 'WorkRequest', entityId: id, description: 'Worker acknowledged assignment.', performedById: userId }, tx);
+      return true;
+    });
+    if (changed) this.emitWorkRequestUpdated(id);
+    return this.findOne(id);
+  }
+
+  async manuallyInform(id: string, assignmentId: string, actorId: string, dto: ManualInformDto) {
+    await this.prisma.$transaction(async tx => {
+      await this.authorizePrivilegedActor(tx, actorId);
+      const changed = await tx.workRequestAssignment.updateMany({ where: { id: assignmentId, workRequestId: id, unassignedAt: null }, data: { manuallyInformedAt: new Date(), manuallyInformedById: actorId, communicationMethod: dto.communicationMethod } });
+      if (!changed.count) throw new ConflictException('Active assignment not found.');
+      const assignment = await tx.workRequestAssignment.findUnique({ where: { id: assignmentId }, select: { userId: true } });
+      await this.activity(tx, { workRequestId: id, type: WorkRequestActivityType.WORKER_INFORMED_MANUALLY, actorId, performedById: assignment!.userId, metadata: { communicationMethod: dto.communicationMethod } });
+      await this.auditLogService.log({ action: 'MANUALLY_INFORM_WORKER', entityType: 'WorkRequest', entityId: id, description: 'Worker manually informed of assignment.', metadata: { assignmentId, communicationMethod: dto.communicationMethod }, performedById: actorId }, tx);
+    });
+    this.emitWorkRequestUpdated(id);
+    return this.findOne(id);
+  }
+
+  async hold(id: string, actorId: string, role: string, dto: HoldWorkRequestDto) {
+    if (dto.reason === HoldReason.OTHER && !dto.notes?.trim()) throw new BadRequestException('notes are required when reason is OTHER.');
+    await this.prisma.$transaction(async tx => {
+      await this.authorizeOperationalActor(tx, id, actorId, role);
+      const changed = await tx.workRequest.updateMany({ where: { id, status: { in: [RequestStatus.ASSIGNED, RequestStatus.IN_PROGRESS] } }, data: { status: RequestStatus.ON_HOLD } });
+      if (!changed.count) throw new ConflictException('Only assigned or in-progress work can be placed on hold.');
+      await this.activity(tx, { workRequestId: id, type: WorkRequestActivityType.PLACED_ON_HOLD, actorId, metadata: { reason: dto.reason, notes: dto.notes, heldAt: new Date().toISOString() } });
+      await this.auditLogService.log({ action: 'PLACE_ON_HOLD', entityType: 'WorkRequest', entityId: id, description: 'Work request placed on hold.', metadata: { reason: dto.reason, notes: dto.notes }, performedById: actorId }, tx);
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+    this.emitWorkRequestUpdated(id); return this.findOne(id);
+  }
+
+  async resume(id: string, actorId: string, role: string) {
+    await this.prisma.$transaction(async tx => {
+      await this.authorizeOperationalActor(tx, id, actorId, role);
+      const changed = await tx.workRequest.updateMany({ where: { id, status: RequestStatus.ON_HOLD }, data: { status: RequestStatus.IN_PROGRESS } });
+      if (!changed.count) throw new ConflictException('Only on-hold work can be resumed.');
+      await this.activity(tx, { workRequestId: id, type: WorkRequestActivityType.RESUMED, actorId, metadata: { resumedAt: new Date().toISOString() } });
+      await this.auditLogService.log({ action: 'RESUME', entityType: 'WorkRequest', entityId: id, description: 'Work request resumed.', performedById: actorId }, tx);
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+    this.emitWorkRequestUpdated(id); return this.findOne(id);
+  }
+
+  async requestClarification(id: string, actorId: string, dto: ClarificationDto) {
+    const result = await this.prisma.$transaction(async tx => {
+      await this.authorizePrivilegedActor(tx, actorId);
+      const wr = await tx.workRequest.findUnique({ where: { id }, select: { id: true, status: true, requestedById: true, referenceNo: true, maintenanceScheduleId: true } });
+      if (!wr) throw new NotFoundException('Work request not found.');
+      if (!wr.requestedById) throw new ConflictException('Clarification cannot be requested for a walk-in work request without an authenticated requester.');
+      if (wr.status !== RequestStatus.PENDING) throw new ConflictException('Clarification can only be requested while pending review.');
+      await tx.workRequest.update({ where: { id }, data: { clarificationStatus: ClarificationStatus.REQUESTED } });
+      await this.activity(tx, { workRequestId: id, type: WorkRequestActivityType.CLARIFICATION_REQUESTED, actorId, metadata: { message: dto.message } });
+      await this.auditLogService.log({ action: 'REQUEST_CLARIFICATION', entityType: 'WorkRequest', entityId: id, description: 'Requested work request clarification.', metadata: { message: dto.message }, performedById: actorId }, tx);
+      const notification = wr.requestedById ? await this.notificationsService.createInTransaction(tx, { type: 'WORK_REQUEST_CLARIFICATION_REQUESTED', title: 'Clarification requested', message: `${wr.referenceNo}: ${dto.message}`, userId: wr.requestedById, workRequestId: id, referenceNo: wr.referenceNo }) : null;
+      return { wr, notification };
+    });
+    if (result.notification && result.wr.requestedById) this.notificationsService.emit(result.notification, result.wr.requestedById);
+    this.emitWorkRequestUpdated(id, result.wr.maintenanceScheduleId); return this.findOne(id);
+  }
+
+  async respondClarification(id: string, actorId: string, dto: ClarificationDto) {
+    const scope = await this.readScopeForUser(actorId);
+    const result = await this.prisma.$transaction(async tx => {
+      const actor = await tx.user.findUnique({ where: { id: actorId }, select: { role: { select: { code: true } } } });
+      if (!actor || !['FACULTY', 'PROPERTY_CUSTODIAN'].includes(actor.role.code)) {
+        throw new ForbiddenException('Only the authenticated requester or an authorized office requester may respond to clarification.');
+      }
+      const wr = await tx.workRequest.findFirst({ where: { id, ...scope }, select: { id: true, clarificationStatus: true, referenceNo: true, maintenanceScheduleId: true } });
+      if (!wr) throw new NotFoundException('Work request not found.');
+      if (wr.clarificationStatus !== ClarificationStatus.REQUESTED) throw new ConflictException('No clarification is awaiting a response.');
+      await tx.workRequest.update({ where: { id }, data: { clarificationStatus: ClarificationStatus.RESPONDED } });
+      await this.activity(tx, { workRequestId: id, type: WorkRequestActivityType.CLARIFICATION_RESPONDED, actorId, metadata: { response: dto.message } });
+      await this.auditLogService.log({ action: 'RESPOND_CLARIFICATION', entityType: 'WorkRequest', entityId: id, description: 'Responded to work request clarification.', performedById: actorId }, tx);
+      const officers = await tx.user.findMany({ where: { isActive: true, role: { code: { in: PRIVILEGED_ROLES }, isActive: true } }, select: { id: true } });
+      const notifications = await Promise.all(officers.map(user => this.notificationsService.createInTransaction(tx, { type: 'WORK_REQUEST_CLARIFICATION_RESPONDED', title: 'Clarification received', message: `${wr.referenceNo}: requester clarification received.`, userId: user.id, workRequestId: id, referenceNo: wr.referenceNo })));
+      return { wr, notifications, officers };
+    });
+    result.notifications.forEach((notification, index) => this.notificationsService.emit(notification, result.officers[index].id));
+    this.emitWorkRequestUpdated(id, result.wr.maintenanceScheduleId); return this.findOne(id);
+  }
+
+  async reopen(id: string, actorId: string, dto: ReopenWorkRequestDto) {
+    const result = await this.prisma.$transaction(async tx => {
+      await this.authorizePrivilegedActor(tx, actorId);
+      const wr = await tx.workRequest.findUnique({ where: { id }, select: { id: true, status: true, maintenanceScheduleId: true, referenceNo: true, completedAt: true, completionOutcome: true } });
+      if (!wr) throw new NotFoundException('Work request not found.');
+      if (wr.maintenanceScheduleId) throw new ConflictException('Completed maintenance-generated work requests cannot be reopened because schedule recurrence has advanced.');
+      const changed = await tx.workRequest.updateMany({ where: { id, status: RequestStatus.COMPLETED }, data: { status: RequestStatus.IN_PROGRESS, progressPercent: 100, isActive: true } });
+      if (!changed.count) throw new ConflictException('Only completed work requests can be reopened.');
+      await this.activity(tx, { workRequestId: id, type: WorkRequestActivityType.REOPENED, actorId, metadata: { reason: dto.reason, previousCompletedAt: wr.completedAt?.toISOString(), previousOutcome: wr.completionOutcome } });
+      await this.auditLogService.log({ action: 'REOPEN', entityType: 'WorkRequest', entityId: id, description: `Reopened work request ${wr.referenceNo}`, metadata: { reason: dto.reason, previousCompletedAt: wr.completedAt?.toISOString(), previousOutcome: wr.completionOutcome }, performedById: actorId }, tx);
+      return wr;
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+    this.emitWorkRequestUpdated(id, result.maintenanceScheduleId); return this.findOne(id);
   }
 
   async cancel(id: string, userId: string) {

@@ -1,4 +1,5 @@
-import { IsOptional, IsObject, IsInt, IsString, IsDateString, Min, Max, IsBoolean } from 'class-validator';
+import { IsOptional, IsObject, IsInt, IsString, IsDateString, Min, Max, IsBoolean, IsEnum } from 'class-validator';
+import { CompletionOutcome } from '@prisma/client';
 
 export class CompleteWorkRequestDto {
   @IsDateString()
@@ -28,6 +29,10 @@ export class CompleteWorkRequestDto {
   @IsOptional()
   @IsBoolean()
   cannotBeRepaired?: boolean;
+
+  @IsOptional()
+  @IsEnum(CompletionOutcome)
+  outcome?: CompletionOutcome;
 
   @IsString()
   @IsOptional()

@@ -80,6 +80,7 @@ async function main() {
   const first = await prisma.workRequest.findFirstOrThrow({ where: { maintenanceScheduleId: calendar.id, maintenanceCycleKey: `calendar:${initialDue.toISOString()}` } });
   check(!!first, 'initial calendar cycle was not generated at creation');
   check(first.status === RequestStatus.PENDING && first.approvalStatus === ApprovalStatus.PENDING && (await prisma.workRequestAssignment.count({ where: { workRequestId: first.id, unassignedAt: null } })) === 0, 'generated maintenance request must await approval before assignment');
+  check((await maintenance.findOne(calendar.id)).workRequests.find(request => request.id === first.id)?.assignments.length === 0, 'schedule detail did not expose an empty pre-approval assignment list');
   check(realtimeEvents.some(event => event.workRequestId === first.id && event.maintenanceScheduleId === calendar.id), 'initial calendar work request did not emit a maintenance-scoped realtime event');
   const beforeBlockedReject = await prisma.workRequest.findUniqueOrThrow({ where: { id: first.id } });
   await fails(() => work.reject(first.id, user.id, { reason: 'not applicable' }));
@@ -88,9 +89,12 @@ async function main() {
   await ready(first.id);
   const autoAssignment = await prisma.workRequestAssignment.findFirstOrThrow({ where: { workRequestId: first.id, unassignedAt: null } });
   check(autoAssignment.userId === user.id && autoAssignment.role === AssignmentRole.LEAD && (await prisma.workRequestAssignment.count({ where: { workRequestId: first.id, unassignedAt: null } })) === 1, 'approval did not create exactly one preferred LEAD assignment');
+  const projectedAssignment = (await maintenance.findOne(calendar.id)).workRequests.find(request => request.id === first.id)?.assignments[0];
+  check(projectedAssignment?.role === AssignmentRole.LEAD && projectedAssignment.user.id === user.id && projectedAssignment.user.position?.id === position.id, 'schedule detail did not expose the safe preferred-assignee assignment projection');
   await work.unassign(first.id, autoAssignment.id, user.id);
   await work.assign(first.id, user.id, { userId: user.id, role: AssignmentRole.MEMBER });
   check((await prisma.maintenanceSchedule.findUniqueOrThrow({ where: { id: calendar.id } })).defaultAssigneeId === user.id, 'manual request reassignment changed the schedule default');
+  check((await maintenance.findOne(calendar.id)).workRequests.find(request => request.id === first.id)?.assignments.some(assignment => assignment.unassignedAt !== null) === true, 'schedule detail did not preserve unassigned assignment history');
   const completedAt = new Date(Date.now() + 1_000);
   await work.complete(first.id, user.id, { dateTimeCompleted: completedAt.toISOString() }, 'CAMPUS_STAFF');
   const afterFirst = await prisma.maintenanceSchedule.findUniqueOrThrow({ where: { id: calendar.id } });
@@ -124,8 +128,9 @@ async function main() {
   const fallbackRequest = await prisma.workRequest.findFirstOrThrow({ where: { maintenanceScheduleId: fallbackSchedule.id } });
   await work.approve(fallbackRequest.id, fallbackUser.id, {});
   check((await prisma.workRequestAssignment.findFirstOrThrow({ where: { workRequestId: fallbackRequest.id, unassignedAt: null } })).userId === fallbackUser.id && (await prisma.maintenanceSchedule.findUniqueOrThrow({ where: { id: fallbackSchedule.id } })).defaultAssigneeId === user.id, 'inactive preferred worker did not safely fall back without rewriting the preference');
+  check((await maintenance.findOne(fallbackSchedule.id)).workRequests.find(request => request.id === fallbackRequest.id)?.assignments.some(assignment => assignment.role === AssignmentRole.MEMBER && assignment.user.id === fallbackUser.id) === true, 'schedule detail did not expose fallback MEMBER assignments');
   await prisma.user.update({ where: { id: user.id }, data: { isActive: true } });
-  console.log(`phase5 maintenance integration passed: ${checks}/27 assertions`);
+  console.log(`phase5 maintenance integration passed: ${checks}/31 assertions`);
   await prisma.$disconnect();
 }
 

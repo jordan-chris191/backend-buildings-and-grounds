@@ -24,6 +24,7 @@ import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { RequestStatus, Campus } from '@prisma/client';
 import { QueryWorkRequestsDto } from './dto/query-work-requests.dto';
+import { ClarificationDto, CompleteOnBehalfDto, HoldWorkRequestDto, ManualInformDto, ProgressOnBehalfDto, ReassignWorkRequestDto, ReopenWorkRequestDto } from './dto/lifecycle-work-request.dto';
 
 @Controller('work-requests')
 export class WorkRequestsController {
@@ -54,12 +55,19 @@ export class WorkRequestsController {
     return this.workRequestsService.findAllForUser(
       req.user.userId,
       query.status,
+      query.source,
       query.campus,
       assignedToUserId,
       includeInactiveFlag,
       query.page,
       query.limit,
     );
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Get('stats')
+  stats(@Req() req) {
+    return this.workRequestsService.statsForUser(req.user.userId);
   }
 
   @UseGuards(JwtAuthGuard)
@@ -148,6 +156,13 @@ export class WorkRequestsController {
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('ADMINISTRATOR', 'BUILDING_GROUNDS_OFFICER')
+  @Post(':id/progress-on-behalf')
+  progressOnBehalf(@Param('id') id: string, @Req() req, @Body() dto: ProgressOnBehalfDto) {
+    return this.workRequestsService.progressOnBehalf(id, req.user.userId, dto);
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('ADMINISTRATOR', 'BUILDING_GROUNDS_OFFICER', 'PROPERTY_CUSTODIAN', 'CAMPUS_STAFF')
   @Patch(':id/complete')
   complete(
@@ -157,6 +172,52 @@ export class WorkRequestsController {
   ) {
     return this.workRequestsService.complete(id, req.user.userId, dto, req.user.role);
   }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('ADMINISTRATOR', 'BUILDING_GROUNDS_OFFICER')
+  @Post(':id/complete-on-behalf')
+  completeOnBehalf(@Param('id') id: string, @Req() req, @Body() dto: CompleteOnBehalfDto) {
+    return this.workRequestsService.completeOnBehalf(id, req.user.userId, dto);
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('ADMINISTRATOR', 'BUILDING_GROUNDS_OFFICER')
+  @Post(':id/reassign')
+  reassign(@Param('id') id: string, @Req() req, @Body() dto: ReassignWorkRequestDto) { return this.workRequestsService.reassign(id, req.user.userId, dto); }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('CAMPUS_STAFF')
+  @Post(':id/assignments/:assignmentId/acknowledge')
+  acknowledge(@Param('id') id: string, @Param('assignmentId') assignmentId: string, @Req() req) { return this.workRequestsService.acknowledge(id, assignmentId, req.user.userId); }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('ADMINISTRATOR', 'BUILDING_GROUNDS_OFFICER')
+  @Post(':id/assignments/:assignmentId/inform')
+  inform(@Param('id') id: string, @Param('assignmentId') assignmentId: string, @Req() req, @Body() dto: ManualInformDto) { return this.workRequestsService.manuallyInform(id, assignmentId, req.user.userId, dto); }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('ADMINISTRATOR', 'BUILDING_GROUNDS_OFFICER', 'CAMPUS_STAFF')
+  @Post(':id/hold')
+  hold(@Param('id') id: string, @Req() req, @Body() dto: HoldWorkRequestDto) { return this.workRequestsService.hold(id, req.user.userId, req.user.role, dto); }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('ADMINISTRATOR', 'BUILDING_GROUNDS_OFFICER', 'CAMPUS_STAFF')
+  @Post(':id/resume')
+  resume(@Param('id') id: string, @Req() req) { return this.workRequestsService.resume(id, req.user.userId, req.user.role); }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('ADMINISTRATOR', 'BUILDING_GROUNDS_OFFICER')
+  @Post(':id/clarification')
+  requestClarification(@Param('id') id: string, @Req() req, @Body() dto: ClarificationDto) { return this.workRequestsService.requestClarification(id, req.user.userId, dto); }
+
+  @UseGuards(JwtAuthGuard)
+  @Post(':id/clarification/respond')
+  respondClarification(@Param('id') id: string, @Req() req, @Body() dto: ClarificationDto) { return this.workRequestsService.respondClarification(id, req.user.userId, dto); }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('ADMINISTRATOR', 'BUILDING_GROUNDS_OFFICER')
+  @Post(':id/reopen')
+  reopen(@Param('id') id: string, @Req() req, @Body() dto: ReopenWorkRequestDto) { return this.workRequestsService.reopen(id, req.user.userId, dto); }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('ADMINISTRATOR', 'BUILDING_GROUNDS_OFFICER')

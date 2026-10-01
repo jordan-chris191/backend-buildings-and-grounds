@@ -63,7 +63,41 @@ export class MaintenanceSchedulesService {
         position: { select: { id: true, name: true } },
       },
     },
-    workRequests: true,
+    workRequests: {
+      select: {
+        id: true,
+        referenceNo: true,
+        requestType: true,
+        particulars: true,
+        status: true,
+        approvalStatus: true,
+        createdAt: true,
+        updatedAt: true,
+        deadline: true,
+        progressPercent: true,
+        campus: true,
+        isActive: true,
+        priority: true,
+        maintenanceCycleKey: true,
+        maintenanceScheduleId: true,
+        assignments: {
+          select: {
+            id: true,
+            role: true,
+            assignedAt: true,
+            unassignedAt: true,
+            user: {
+              select: {
+                id: true,
+                firstName: true,
+                lastName: true,
+                position: { select: { id: true, name: true } },
+              },
+            },
+          },
+        },
+      },
+    },
   };
 
   private readonly detailInclude = {

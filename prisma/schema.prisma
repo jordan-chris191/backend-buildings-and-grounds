@@ -62,6 +62,12 @@ model User {
   rejectedWorkRequests        WorkRequest[]               @relation("WorkRequestRejectedBy")
   runHourReadingsRecorded     RunHourReading[]            @relation("RunHourReadingRecordedBy")
   createdWorkRequests         WorkRequest[]               @relation("CreatedWorkRequests")
+  workRequestActivities       WorkRequestActivity[]       @relation("WorkRequestActivityActor")
+  performedWorkRequestActivities WorkRequestActivity[]    @relation("WorkRequestActivityPerformedBy")
+  completionRecordedWorkRequests WorkRequest[]            @relation("WorkRequestCompletionRecordedBy")
+  completionPerformedWorkRequests WorkRequest[]           @relation("WorkRequestCompletionPerformedBy")
+  assignmentsUnassigned       WorkRequestAssignment[]     @relation("WorkRequestAssignmentUnassignedBy")
+  assignmentsManuallyInformed WorkRequestAssignment[]     @relation("WorkRequestAssignmentManuallyInformedBy")
   createdEvents               Event[]                     @relation("EventCreator")
 
   @@index([roleId])
@@ -427,6 +433,11 @@ model WorkRequest {
   approvedById    String?
   rejectedAt      DateTime?
   rejectedById    String?
+  clarificationStatus ClarificationStatus @default(NONE)
+  completionOutcome CompletionOutcome?
+  completedAt DateTime?
+  completionRecordedById String?
+  completionPerformedById String?
 
   notifications       Notification[]             @relation("WorkRequestNotifications")
   maintenanceSchedule MaintenanceSchedule?       @relation("MaintenanceWorkRequests", fields: [maintenanceScheduleId], references: [id])
@@ -438,6 +449,9 @@ model WorkRequest {
   items               WorkRequestItem[]          @relation("WorkRequestItems")
   approvedBy          User?                      @relation("WorkRequestApprovedBy", fields: [approvedById], references: [id])
   rejectedBy          User?                      @relation("WorkRequestRejectedBy", fields: [rejectedById], references: [id])
+  completionRecordedBy User?                     @relation("WorkRequestCompletionRecordedBy", fields: [completionRecordedById], references: [id])
+  completionPerformedBy User?                    @relation("WorkRequestCompletionPerformedBy", fields: [completionPerformedById], references: [id])
+  activities          WorkRequestActivity[]      @relation("WorkRequestActivities")
 
   @@unique([maintenanceScheduleId, maintenanceCycleKey])
   @@index([requestedById])
@@ -450,6 +464,9 @@ model WorkRequest {
   @@index([maintenanceScheduleId])
   @@index([approvalStatus])
   @@index([priority])
+  @@index([clarificationStatus])
+  @@index([completionRecordedById])
+  @@index([completionPerformedById])
 }
 
 model WorkRequestItem {
@@ -474,12 +491,39 @@ model WorkRequestAssignment {
   workRequestId String
   userId        String
   unassignedAt  DateTime?
+  unassignedById String?
+  reassignmentReason ReassignmentReason?
+  reassignmentReasonNotes String?
+  acknowledgedAt DateTime?
+  manuallyInformedAt DateTime?
+  manuallyInformedById String?
+  communicationMethod CommunicationMethod?
   role          AssignmentRole
   user          User           @relation("WorkRequestAssignmentUser", fields: [userId], references: [id])
   workRequest   WorkRequest    @relation("WorkRequestAssignments", fields: [workRequestId], references: [id], onDelete: Cascade)
+  unassignedBy User? @relation("WorkRequestAssignmentUnassignedBy", fields: [unassignedById], references: [id])
+  manuallyInformedBy User? @relation("WorkRequestAssignmentManuallyInformedBy", fields: [manuallyInformedById], references: [id])
 
   @@index([workRequestId])
   @@index([userId])
+}
+
+model WorkRequestActivity {
+  id String @id @default(uuid())
+  workRequestId String
+  type WorkRequestActivityType
+  actorId String?
+  performedById String?
+  metadata Json?
+  occurredAt DateTime @default(now())
+  createdAt DateTime @default(now())
+  workRequest WorkRequest @relation("WorkRequestActivities", fields: [workRequestId], references: [id], onDelete: Cascade)
+  actor User? @relation("WorkRequestActivityActor", fields: [actorId], references: [id])
+  performedBy User? @relation("WorkRequestActivityPerformedBy", fields: [performedById], references: [id])
+
+  @@index([workRequestId, occurredAt])
+  @@index([actorId])
+  @@index([performedById])
 }
 
 model WorkRequestAccomplishment {
@@ -778,7 +822,70 @@ enum RequestStatus {
   PENDING
   ASSIGNED
   IN_PROGRESS
+  ON_HOLD
   COMPLETED
+  CANCELLED
+}
+
+enum ClarificationStatus {
+  NONE
+  REQUESTED
+  RESPONDED
+}
+enum CompletionOutcome {
+  RESOLVED
+  PARTIALLY_RESOLVED
+  REQUIRES_REPLACEMENT
+  REQUIRES_EXTERNAL_SERVICE
+  UNABLE_TO_REPAIR
+}
+enum OnBehalfReason {
+  NO_NETWORK_ACCESS
+  NO_APP_ACCESS
+  DEVICE_UNAVAILABLE
+  WORKER_UNAVAILABLE
+  OTHER
+}
+enum ReassignmentReason {
+  WORKER_UNAVAILABLE
+  WORKER_ON_LEAVE
+  WRONG_ASSIGNMENT
+  DIFFERENT_SKILL_REQUIRED
+  WORKLOAD_REBALANCE
+  OTHER
+}
+enum HoldReason {
+  WAITING_FOR_MATERIALS
+  WAITING_FOR_PARTS
+  WAITING_FOR_ACCESS
+  WORKER_UNAVAILABLE
+  WEATHER
+  WAITING_FOR_EXTERNAL_SERVICE
+  OTHER
+}
+enum CommunicationMethod {
+  IN_PERSON
+  PHONE
+  RADIO
+  OTHER
+}
+enum WorkRequestActivityType {
+  SUBMITTED
+  APPROVED
+  REJECTED
+  CLARIFICATION_REQUESTED
+  CLARIFICATION_RESPONDED
+  ASSIGNED
+  REASSIGNED
+  WORKER_ACKNOWLEDGED
+  WORKER_INFORMED_MANUALLY
+  PROGRESS_UPDATED
+  PROGRESS_RECORDED_ON_BEHALF
+  PLACED_ON_HOLD
+  RESUMED
+  COMPLETED
+  COMPLETED_ON_BEHALF
+  REOPENED
   CANCELLED
 }
 
