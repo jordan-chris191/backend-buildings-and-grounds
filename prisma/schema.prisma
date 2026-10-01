@@ -62,6 +62,7 @@ model User {
   rejectedWorkRequests        WorkRequest[]               @relation("WorkRequestRejectedBy")
   runHourReadingsRecorded     RunHourReading[]            @relation("RunHourReadingRecordedBy")
   createdWorkRequests         WorkRequest[]               @relation("CreatedWorkRequests")
+  createdEvents               Event[]                     @relation("EventCreator")
 
   @@index([roleId])
   @@index([positionId])
@@ -591,6 +592,34 @@ model RunHourReading {
   @@index([recordedById])
 }
 
+/// Office calendar entries. This deliberately remains separate from
+/// MaintenanceSchedule, which is the authoritative source for maintenance work.
+model Event {
+  id          String    @id @default(uuid())
+  title       String
+  type        EventType
+  description String?
+  location    String?
+  campus      Campus?
+  startsAt    DateTime
+  endsAt      DateTime?
+  allDay      Boolean   @default(false)
+  createdById String
+  isActive    Boolean   @default(true)
+  archivedAt  DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  createdBy User @relation("EventCreator", fields: [createdById], references: [id])
+
+  @@index([startsAt])
+  @@index([endsAt])
+  @@index([type])
+  @@index([campus])
+  @@index([isActive])
+  @@index([createdById])
+}
+
 model AuditLog {
   id            String   @id @default(uuid())
   action        String
@@ -686,6 +715,14 @@ enum Campus {
   MC1
   MC2
   PAMPLONA
+}
+
+enum EventType {
+  MEETING
+  INSPECTION
+  DEADLINE
+  ACTIVITY
+  OTHER
 }
 
 enum ProjectType {

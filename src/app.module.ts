@@ -26,6 +26,7 @@ import { StockMovementsModule } from './stock-movements/stock-movements.module';
 import { MaintainableAssetProfilesModule } from './maintainable-asset-profile/maintainable-asset-profiles.module';
 import { AssetTypeConfigsModule } from './asset-type-configs/asset-type-configs.module';
 import { MaintenanceUnitTypeConfigsModule } from './maintenanc-unit-type-configs/maintenance-unit-type-configs.module';
+import { EventsModule } from './events/events.module';
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
@@ -56,7 +57,8 @@ import { MaintenanceUnitTypeConfigsModule } from './maintenanc-unit-type-configs
     StockMovementsModule,
     MaintainableAssetProfilesModule,
     AssetTypeConfigsModule,
-    MaintenanceUnitTypeConfigsModule
+    MaintenanceUnitTypeConfigsModule,
+    EventsModule,
   ],
   controllers: [AppController],
   providers: [
