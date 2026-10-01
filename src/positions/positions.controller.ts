@@ -7,6 +7,8 @@ import {
   Patch,
   Post,
   UseGuards,
+  Query,
+  Req,
 } from '@nestjs/common';
 
 import { PositionsService } from './positions.service';
@@ -24,8 +26,8 @@ export class PositionsController {
   constructor(private readonly positionsService: PositionsService) {}
 
   @Get()
-  findAll() {
-    return this.positionsService.findAll();
+  findAll(@Query('search') search?: string, @Query('isActive') isActive?: string) {
+    return this.positionsService.findAll(search, isActive);
   }
 
   @Get(':id')
@@ -36,8 +38,8 @@ export class PositionsController {
   @Post()
   @UseGuards(RolesGuard)
   @Roles('ADMINISTRATOR')
-  create(@Body() dto: CreatePositionDto) {
-    return this.positionsService.create(dto);
+  create(@Body() dto: CreatePositionDto, @Req() req) {
+    return this.positionsService.create(dto, req.user.userId);
   }
 
   @Patch(':id')
@@ -45,15 +47,20 @@ export class PositionsController {
   @Roles('ADMINISTRATOR')
   update(
     @Param('id') id: string,
-    @Body() dto: UpdatePositionDto,
+    @Body() dto: UpdatePositionDto, @Req() req,
   ) {
-    return this.positionsService.update(id, dto);
+    return this.positionsService.update(id, dto, req.user.userId);
   }
 
   @Delete(':id')
   @UseGuards(RolesGuard)
   @Roles('ADMINISTRATOR')
-  remove(@Param('id') id: string) {
-    return this.positionsService.remove(id);
+  remove(@Param('id') id: string, @Req() req) {
+    return this.positionsService.remove(id, req.user.userId);
   }
+
+  @Patch(':id/reactivate')
+  @UseGuards(RolesGuard)
+  @Roles('ADMINISTRATOR')
+  reactivate(@Param('id') id: string, @Req() req) { return this.positionsService.reactivate(id, req.user.userId); }
 }

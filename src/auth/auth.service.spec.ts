@@ -40,4 +40,28 @@ describe('AuthService', () => {
     });
     await expect(service.refresh('raw-token')).rejects.toThrow('authorization has changed');
   });
+
+  describe('organization relationship rules', () => {
+    const activeOffice = { id: 'office-1', isActive: true, campus: 'MC1' };
+    const activePosition = { id: 'position-1', isActive: true };
+
+    it('requires an Office for FACULTY', async () => {
+      await expect((service as any).validateOrganization({ code: 'FACULTY', isActive: true }, null, null))
+        .rejects.toThrow('FACULTY requires an Office');
+    });
+
+    it('requires an Office and active Position for CAMPUS_STAFF', async () => {
+      await expect((service as any).validateOrganization({ code: 'CAMPUS_STAFF', isActive: true }, activeOffice, null))
+        .rejects.toThrow('CAMPUS_STAFF requires a Position');
+      await expect((service as any).validateOrganization({ code: 'CAMPUS_STAFF', isActive: true }, activeOffice, { ...activePosition, isActive: false }))
+        .rejects.toThrow('Position must exist and be active');
+      await expect((service as any).validateOrganization({ code: 'CAMPUS_STAFF', isActive: true }, activeOffice, activePosition))
+        .resolves.toBeUndefined();
+    });
+
+    it('allows an ADMINISTRATOR without Office or Position', async () => {
+      await expect((service as any).validateOrganization({ code: 'ADMINISTRATOR', isActive: true }, null, null))
+        .resolves.toBeUndefined();
+    });
+  });
 });

@@ -23,6 +23,8 @@ import { CreateUserDto } from './dto/create-user.dto';
 import { ChangeRoleDto } from './dto/change-role.dto';
 import { ChangeOfficeDto } from './dto/change-office.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
+import { UpdateUserDto } from './dto/update-user.dto';
+import { Campus } from '@prisma/client';
 
 @Controller('auth')
 export class AuthController {
@@ -80,6 +82,38 @@ export class AuthController {
     @Query('roleName') roleName?: string,
   ) {
     return this.authService.findUsers(positionId, roleId, officeId, roleName);
+  }
+
+  // Kept separate from the operational lookup above so B&G assignment screens
+  // do not need an administrator-only management endpoint.
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('ADMINISTRATOR')
+  @Get('admin/users')
+  findManagedUsers(
+    @Query('search') search?: string,
+    @Query('roleId') roleId?: string,
+    @Query('officeId') officeId?: string,
+    @Query('positionId') positionId?: string,
+    @Query('campus') campus?: Campus,
+    @Query('isActive') isActive?: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.authService.findManagedUsers({ search, roleId, officeId, positionId, campus, isActive, page, limit });
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('ADMINISTRATOR')
+  @Get('admin/users/:id')
+  findManagedUser(@Param('id') id: string) {
+    return this.authService.findManagedUser(id);
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('ADMINISTRATOR')
+  @Patch('admin/users/:id')
+  updateUser(@Param('id') id: string, @Body() dto: UpdateUserDto, @Req() req) {
+    return this.authService.updateUser(id, dto, req.user.userId);
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)

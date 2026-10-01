@@ -13,6 +13,7 @@ import { BorrowRequestsGateway } from '../gateway/borrow-requests.gateway';
 import { ROLE_CODES } from './role-codes';
 import * as bcrypt from 'bcrypt';
 import * as crypto from 'crypto';
+import { Campus, Prisma } from '@prisma/client';
 
 
 const MAX_FAILED_ATTEMPTS = parseInt(
@@ -36,9 +37,11 @@ const SAFE_USER_SELECT = {
   firstName: true,
   lastName: true,
   isActive: true,
+  createdAt: true,
+  updatedAt: true,
   role: { select: { id: true, code: true, name: true } },
-  position: { select: { id: true, name: true } },
-  office: { select: { id: true, name: true, campus: true } },
+  position: { select: { id: true, name: true, isActive: true } },
+  office: { select: { id: true, name: true, campus: true, isActive: true } },
 } as const;
 
 @Injectable()
@@ -51,13 +54,40 @@ export class AuthService {
     private readonly gateway: BorrowRequestsGateway,
   ) {}
 
+  private safeUser(user: any) {
+    return {
+      id: user.id, email: user.email, firstName: user.firstName, lastName: user.lastName,
+      isActive: user.isActive, personId: user.personId ?? null,
+      role: user.role ? { id: user.role.id, code: user.role.code, name: user.role.name } : null,
+      office: user.office ? { id: user.office.id, name: user.office.name, campus: user.office.campus, isActive: user.office.isActive } : null,
+      position: user.position ? { id: user.position.id, name: user.position.name, isActive: user.position.isActive } : null,
+    };
+  }
+
+  /** Validates current assignments only; inactive historical relations remain readable. */
+  private async validateOrganization(role: any, office: any, position: any) {
+    if (!role?.isActive) throw new BadRequestException('Role must exist and be active');
+    const officeRequired = [
+      ROLE_CODES.FACULTY,
+      ROLE_CODES.PROPERTY_CUSTODIAN,
+      ROLE_CODES.CAMPUS_STAFF,
+      ROLE_CODES.BUILDING_GROUNDS_OFFICER,
+    ].includes(role.code);
+    if (officeRequired && !office) throw new BadRequestException(`${role.code} requires an Office`);
+    if (office && !office.isActive) throw new BadRequestException('Office must exist and be active');
+    if (position && !position.isActive) throw new BadRequestException('Position must exist and be active');
+    if (role.code === ROLE_CODES.CAMPUS_STAFF && !position) {
+      throw new BadRequestException('CAMPUS_STAFF requires a Position');
+    }
+  }
+
   // ---------------------------------------------------------
   // LOGIN
   // ---------------------------------------------------------
   async login(email: string, password: string) {
     const user = await this.prisma.user.findUnique({
       where: { email },
-      include: { role: true, office: true },
+      include: { role: true, office: true, position: true },
     });
 
     if (!user || !user.isActive || !user.role.isActive) {
@@ -101,11 +131,18 @@ export class AuthService {
         firstName: user.firstName,
         lastName: user.lastName,
         role: user.role.name,
-        office: user.office ? {   // ✅ Add this
-        id: user.office.id,
-        name: user.office.name,
-        campus: user.office.campus,
-      } : null,
+        roleCode: user.role.code,
+        office: user.office ? {
+          id: user.office.id,
+          name: user.office.name,
+          campus: user.office.campus,
+          isActive: user.office.isActive,
+        } : null,
+        position: user.position ? {
+          id: user.position.id,
+          name: user.position.name,
+          isActive: user.position.isActive,
+        } : null,
       },
     };
   }
@@ -320,13 +357,13 @@ export class AuthService {
         lastName: true,
         isActive: true,
         position: {
-          select: { id: true, name: true },
+          select: { id: true, name: true, isActive: true },
         },
         role: {
           select: { id: true, code: true, name: true },
         },
         office: {
-          select: { id: true, name: true, campus: true },
+          select: { id: true, name: true, campus: true, isActive: true },
         },
       },
     });
@@ -353,6 +390,7 @@ export class AuthService {
       positionId?: string;
       officeId?: string;
       personId?: string;
+      password?: string;
     },
     performedById: string,
   ) {
@@ -367,16 +405,14 @@ export class AuthService {
       dto.positionId ? this.prisma.position.findUnique({ where: { id: dto.positionId } }) : null,
       dto.personId ? this.prisma.person.findUnique({ where: { id: dto.personId } }) : null,
     ]);
-    if (!role?.isActive) throw new BadRequestException('Role must exist and be active');
-    if (dto.officeId && !office?.isActive) throw new BadRequestException('Office must exist and be active');
-    if (dto.positionId && !position?.isActive) throw new BadRequestException('Position must exist and be active');
+    await this.validateOrganization(role, office, position);
     if (dto.personId && !person?.isActive) throw new BadRequestException('Person must exist and be active');
     if (dto.personId && await this.prisma.user.findUnique({ where: { personId: dto.personId } })) {
       throw new ForbiddenException('Person is already linked to another user account');
     }
 
-    const defaultPassword = 'staff@123';
-    const passwordHash = await bcrypt.hash(defaultPassword, 10);
+    const provisionedPassword = dto.password ?? 'staff@123';
+    const passwordHash = await bcrypt.hash(provisionedPassword, 10);
 
     const user = await this.prisma.user.create({
       data: {
@@ -393,25 +429,17 @@ export class AuthService {
     });
 
     await this.auditLogService.log({
-      action: 'CREATE',
+      action: 'USER_CREATED',
       entityType: 'User',
       entityId: user.id,
-      description: `Created user ${user.email} with role ${user.role.name}`,
+      description: `Created user ${user.email} with role ${user.role.code}`,
+      metadata: { roleId: user.roleId, officeId: user.officeId, positionId: user.positionId },
       performedById,
     });
 
     return {
-      message: 'User created successfully. Default password: staff@123',
-      user: {
-        id: user.id,
-        email: user.email,
-        firstName: user.firstName,
-        lastName: user.lastName,
-        role: user.role.name,
-        position: user.position?.name ?? null,
-        office: user.office?.name ?? null,
-        personId: user.personId,
-      },
+      message: dto.password ? 'User created successfully.' : 'User created successfully. Default password: staff@123',
+      user: this.safeUser(user),
     };
   }
 
@@ -437,13 +465,79 @@ export class AuthService {
     });
   }
 
+  async findManagedUsers(query: {
+    search?: string; roleId?: string; officeId?: string; positionId?: string;
+    campus?: Campus; isActive?: string; page?: string; limit?: string;
+  }) {
+    const page = Math.max(1, Number(query.page) || 1);
+    const limit = Math.min(100, Math.max(1, Number(query.limit) || 10));
+    const active = query.isActive === undefined ? undefined : query.isActive === 'true';
+    const search = query.search?.trim();
+    const where: Prisma.UserWhereInput = {
+      ...(query.roleId ? { roleId: query.roleId } : {}),
+      ...(query.officeId ? { officeId: query.officeId } : {}),
+      ...(query.positionId ? { positionId: query.positionId } : {}),
+      ...(query.campus ? { office: { is: { campus: query.campus } } } : {}),
+      ...(active === undefined ? {} : { isActive: active }),
+      ...(search ? { OR: [
+        { firstName: { contains: search, mode: 'insensitive' } },
+        { lastName: { contains: search, mode: 'insensitive' } },
+        { email: { contains: search, mode: 'insensitive' } },
+      ] } : {}),
+    };
+    const [data, total] = await this.prisma.$transaction([
+      this.prisma.user.findMany({ where, select: SAFE_USER_SELECT, skip: (page - 1) * limit, take: limit, orderBy: [{ lastName: 'asc' }, { firstName: 'asc' }, { id: 'asc' }] }),
+      this.prisma.user.count({ where }),
+    ]);
+    return { data, meta: { page, limit, total, totalPages: Math.ceil(total / limit) } };
+  }
+
+  async findManagedUser(userId: string) {
+    const user = await this.prisma.user.findUnique({ where: { id: userId }, select: SAFE_USER_SELECT });
+    if (!user) throw new NotFoundException('User not found');
+    return user;
+  }
+
+  async updateUser(userId: string, dto: { email?: string; firstName?: string; lastName?: string; roleId?: string; officeId?: string | null; positionId?: string | null }, performedById: string) {
+    const user = await this.prisma.user.findUnique({ where: { id: userId }, include: { role: true, office: true, position: true } });
+    if (!user) throw new NotFoundException('User not found');
+    if (dto.email && dto.email !== user.email) {
+      const owner = await this.prisma.user.findUnique({ where: { email: dto.email } });
+      if (owner) throw new ForbiddenException('A user with this email already exists');
+    }
+    const [role, office, position] = await Promise.all([
+      dto.roleId ? this.prisma.role.findUnique({ where: { id: dto.roleId } }) : user.role,
+      dto.officeId === undefined ? user.office : dto.officeId ? this.prisma.office.findUnique({ where: { id: dto.officeId } }) : null,
+      dto.positionId === undefined ? user.position : dto.positionId ? this.prisma.position.findUnique({ where: { id: dto.positionId } }) : null,
+    ]);
+    await this.validateOrganization(role, office, position);
+    const changedAuth = dto.roleId !== undefined && dto.roleId !== user.roleId;
+    const updated = await this.prisma.user.update({
+      where: { id: userId },
+      data: { ...(dto.email !== undefined && { email: dto.email }), ...(dto.firstName !== undefined && { firstName: dto.firstName }), ...(dto.lastName !== undefined && { lastName: dto.lastName }), ...(dto.roleId !== undefined && { roleId: dto.roleId }), ...(dto.officeId !== undefined && { officeId: dto.officeId }), ...(dto.positionId !== undefined && { positionId: dto.positionId }), ...(changedAuth && { authVersion: { increment: 1 } }) },
+      select: SAFE_USER_SELECT,
+    });
+    await this.auditLogService.log({ action: 'USER_UPDATED', entityType: 'User', entityId: userId, description: `Updated user ${user.email}`, metadata: { previous: { email: user.email, roleId: user.roleId, officeId: user.officeId, positionId: user.positionId }, next: { email: updated.email, roleId: updated.role.id, officeId: updated.office?.id ?? null, positionId: updated.position?.id ?? null } }, performedById });
+    if (dto.roleId !== undefined && dto.roleId !== user.roleId) {
+      await this.auditLogService.log({ action: 'USER_ROLE_CHANGED', entityType: 'User', entityId: userId, description: `Changed user role to ${updated.role.code}`, metadata: { previousRoleId: user.roleId, roleId: dto.roleId }, performedById });
+    }
+    if (dto.officeId !== undefined && dto.officeId !== user.officeId) {
+      await this.auditLogService.log({ action: 'USER_OFFICE_CHANGED', entityType: 'User', entityId: userId, description: 'Changed user Office', metadata: { previousOfficeId: user.officeId, officeId: dto.officeId }, performedById });
+    }
+    if (dto.positionId !== undefined && dto.positionId !== user.positionId) {
+      await this.auditLogService.log({ action: 'USER_POSITION_CHANGED', entityType: 'User', entityId: userId, description: 'Changed user Position', metadata: { previousPositionId: user.positionId, positionId: dto.positionId }, performedById });
+    }
+    if (changedAuth) this.gateway.disconnectUser(userId);
+    return updated;
+  }
+
   // ---------------------------------------------------------
   // CHANGE ROLE
   // ---------------------------------------------------------
   async changeRole(userId: string, newRoleId: string, performedById: string) {
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
-      include: { role: true },
+      include: { role: true, office: true, position: true },
     });
     if (!user) {
       throw new NotFoundException('User not found');
@@ -465,6 +559,7 @@ export class AuthService {
     if (!newRole?.isActive) {
       throw new BadRequestException('Role must exist and be active');
     }
+    await this.validateOrganization(newRole, user.office, user.position);
 
     const updated = await this.prisma.user.update({
       where: { id: userId },
@@ -473,10 +568,11 @@ export class AuthService {
     });
 
     await this.auditLogService.log({
-      action: 'ROLE_CHANGE',
+      action: 'USER_ROLE_CHANGED',
       entityType: 'User',
       entityId: userId,
-      description: `Changed ${user.email}'s role from ${user.role.name} to ${newRole.name}`,
+      description: `Changed ${user.email}'s role from ${user.role.code} to ${newRole.code}`,
+      metadata: { previousRoleId: user.roleId, roleId: newRoleId },
       performedById,
     });
     this.gateway.disconnectUser(userId);
@@ -488,17 +584,13 @@ export class AuthService {
   // CHANGE OFFICE
   // ---------------------------------------------------------
   async changeOffice(userId: string, officeId: string | undefined, performedById: string) {
-    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    const user = await this.prisma.user.findUnique({ where: { id: userId }, include: { role: true, position: true } });
     if (!user) {
       throw new NotFoundException('User not found');
     }
 
-    if (officeId) {
-      const office = await this.prisma.office.findUnique({ where: { id: officeId } });
-      if (!office?.isActive) {
-        throw new BadRequestException('Office must exist and be active');
-      }
-    }
+    const office = officeId ? await this.prisma.office.findUnique({ where: { id: officeId } }) : null;
+    await this.validateOrganization(user.role, office, user.position);
 
     const updated = await this.prisma.user.update({
       where: { id: userId },
@@ -507,12 +599,13 @@ export class AuthService {
     });
 
     await this.auditLogService.log({
-      action: 'UPDATE',
+      action: 'USER_OFFICE_CHANGED',
       entityType: 'User',
       entityId: userId,
       description: officeId
         ? `Assigned user ${user.email} to office ${officeId}`
         : `Cleared office for user ${user.email}`,
+      metadata: { previousOfficeId: user.officeId, officeId: officeId ?? null },
       performedById,
     });
 
@@ -556,7 +649,7 @@ export class AuthService {
     this.gateway.disconnectUser(userId);
 
     await this.auditLogService.log({
-      action: 'DEACTIVATE',
+      action: 'USER_DEACTIVATED',
       entityType: 'User',
       entityId: userId,
       description: `Deactivated user ${user.email}`,
@@ -587,7 +680,7 @@ export class AuthService {
     });
 
     await this.auditLogService.log({
-      action: 'REACTIVATE',
+      action: 'USER_REACTIVATED',
       entityType: 'User',
       entityId: userId,
       description: `Reactivated user ${user.email}`,

@@ -8,6 +8,7 @@ import {
   Param,
   Query,
   UseGuards,
+  Req,
 } from '@nestjs/common';
 import { OfficesService } from './offices.service';
 import { CreateOfficeDto } from './dto/create-office.dto';
@@ -24,14 +25,14 @@ export class OfficesController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('ADMINISTRATOR')
   @Post()
-  create(@Body() dto: CreateOfficeDto) {
-    return this.officesService.create(dto);
+  create(@Body() dto: CreateOfficeDto, @Req() req) {
+    return this.officesService.create(dto, req.user.userId);
   }
 
   @UseGuards(JwtAuthGuard)
   @Get()
-  findAll(@Query('campus') campus?: Campus) {
-    return this.officesService.findAll(campus);
+  findAll(@Query('campus') campus?: Campus, @Query('search') search?: string, @Query('isActive') isActive?: string, @Query('page') page?: string, @Query('limit') limit?: string) {
+    return this.officesService.findAll({ campus, search, isActive, page, limit });
   }
 
   @UseGuards(JwtAuthGuard)
@@ -43,14 +44,19 @@ export class OfficesController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('ADMINISTRATOR')
   @Patch(':id')
-  update(@Param('id') id: string, @Body() dto: UpdateOfficeDto) {
-    return this.officesService.update(id, dto);
+  update(@Param('id') id: string, @Body() dto: UpdateOfficeDto, @Req() req) {
+    return this.officesService.update(id, dto, req.user.userId);
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('ADMINISTRATOR')
   @Delete(':id')
-  remove(@Param('id') id: string) {
-    return this.officesService.remove(id);
+  remove(@Param('id') id: string, @Req() req) {
+    return this.officesService.remove(id, req.user.userId);
   }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('ADMINISTRATOR')
+  @Patch(':id/reactivate')
+  reactivate(@Param('id') id: string, @Req() req) { return this.officesService.reactivate(id, req.user.userId); }
 }

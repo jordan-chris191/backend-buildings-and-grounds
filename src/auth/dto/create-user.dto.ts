@@ -1,5 +1,5 @@
 // src/auth/dto/create-user.dto.ts
-import { IsEmail, IsString, IsOptional } from 'class-validator';
+import { IsEmail, IsString, IsOptional, MinLength } from 'class-validator';
 
 export class CreateUserDto {
   @IsEmail()
@@ -25,4 +25,10 @@ export class CreateUserDto {
   @IsOptional()
   @IsString()
   personId?: string;
+
+  /** Optional provisioning override.  The established default remains staff@123. */
+  @IsOptional()
+  @IsString()
+  @MinLength(8)
+  password?: string;
 }
